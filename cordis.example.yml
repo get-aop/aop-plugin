@@ -1,0 +1,70 @@
+# AOP Software Delivery Workflow Plugin Configuration Example
+# Mount this entry into your cordis.yml or profile overlay.
+
+- id: aop-delivery
+  name: '@get-aop/dsh-plugin'
+  config:
+    subagentProvider: spawn
+    maxCycles: 8
+    maxFindings: 64
+    maxArtifactChars: 32768
+    maxResultChars: 262144
+    roles:
+      plan:
+        provider: deepseek
+        model: sol-xhigh
+        tools:
+          - name: read
+            access: read
+          - name: grep
+            access: read
+          - name: glob
+            access: read
+
+      implementation:
+        provider: deepseek
+        model: deepseek-v4-flash-max
+        toolPresentation: native
+        tools:
+          - name: read
+            access: read
+          - name: write
+            access: write
+          - name: edit
+            access: write
+          - name: bash
+            access: write
+          - name: grep
+            access: read
+          - name: glob
+            access: read
+
+      review:
+        provider: deepseek
+        model: fable-5-max
+        tools:
+          - name: read
+            access: read
+          - name: grep
+            access: read
+          - name: glob
+            access: read
+
+      qa:
+        provider: deepseek
+        model: sol-medium
+        tools:
+          - name: read
+            access: read
+          - name: browser_navigate
+            access: read
+            browserNavigation: true
+          - name: browser_snapshot
+            access: read
+            browserEvidence: true
+          - name: browser_click
+            access: read
+            browserEvidence: true
+          - name: browser_fill
+            access: read
+            browserEvidence: true
