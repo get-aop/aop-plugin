@@ -15,7 +15,7 @@ export interface ToolGrant {
   access: ToolAccess
   /** Whether a successful post-navigation call supplies browser QA evidence. */
   browserEvidence?: boolean
-  /** Whether this tool navigates the browser to the required QA URL. */
+  /** Whether this tool navigates the browser to the QA target (given or discovered). */
   browserNavigation?: boolean
 }
 

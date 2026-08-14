@@ -78,8 +78,9 @@ const qaSchema = {
     retestedFindingIds: { type: 'array', items: { type: 'string' } },
     findings: { type: 'array', items: findingSchema },
     blocker: { type: 'string' },
+    discoveredUrl: { type: 'string' },
   },
-  required: ['status', 'summary', 'checks', 'retestedFindingIds', 'findings', 'blocker'],
+  required: ['status', 'summary', 'checks', 'retestedFindingIds', 'findings', 'blocker', 'discoveredUrl'],
   additionalProperties: false,
 }
 
@@ -94,6 +95,15 @@ function normalizedList(value) {
 }
 function unique(values) {
   return new Set(values).size === values.length
+}
+function validDiscoveredUrl(value) {
+  if (value === '') return true
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 function sized(value, stage) {
   const length = JSON.stringify(value).length
@@ -181,9 +191,13 @@ function validateQa(value, acceptanceCriteria, priorFindings) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)
     || !normalized(value.summary) || !normalizedOptional(value.blocker) || !Array.isArray(value.checks)
     || !normalizedList(value.retestedFindingIds) || !unique(value.retestedFindingIds)
+    || typeof value.discoveredUrl !== 'string' || !validDiscoveredUrl(value.discoveredUrl)
     || !value.checks.every(check => check !== null && typeof check === 'object' && normalized(check.requirementId)
       && ['passed', 'failed'].includes(check.status) && normalized(check.evidence))) throw new Error('QA artifact is malformed')
   validateFindings(value.findings, 'QA')
+  if (value.status !== 'blocked' && value.discoveredUrl === '') {
+    throw new Error('QA must report the discoveredUrl it tested')
+  }
   const requiredIds = [...acceptanceCriteria.map(criterion => criterion.id), 'QA-INSTRUCTIONS']
   const checkIds = value.checks.map(check => check.requirementId)
   if (!unique(checkIds) || checkIds.some(id => !requiredIds.includes(id))) {
@@ -343,11 +357,20 @@ while (true) {
   ]
   if (args.qaUrl === undefined) {
     qaPromptParts.push(
-      'Discover the deliverable target yourself: inspect the workspace (package.json scripts, README, server config, and the plan acceptance criteria verification methods) to find how the app runs and which URL it serves. Navigate a real browser to it and test every acceptance criterion; the plan defines the outcomes and QA-INSTRUCTIONS is your discovered browser test procedure.',
+      'Discover the deliverable target yourself: inspect the workspace (package.json scripts, README, server config, and the plan acceptance criteria verification methods) to find how the app runs and which URL it serves, then navigate a real browser to it.',
+    )
+  }
+  if (args.qaInstructions === undefined) {
+    qaPromptParts.push(
+      'Derive the browser test procedure from the plan acceptance criteria and report it as requirementId QA-INSTRUCTIONS.',
+    )
+  } else {
+    qaPromptParts.push(
+      'Report the supplied QA instructions as requirementId QA-INSTRUCTIONS.',
     )
   }
   qaPromptParts.push(
-    'Exercise every accepted criterion through browser tools, plus QA-INSTRUCTIONS as the requirementId for the test procedure. Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
+    'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)); if no deliverable target is discoverable, return blocked with discoveredUrl "" and a concrete blocker. Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
   )
   const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())

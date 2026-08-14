@@ -99,7 +99,7 @@ const PERSONAS: Readonly<Record<RoleName, string>> = {
   plan: 'You are the delivery planner. Inspect the repository and produce a decision-complete plan. Never modify files.',
   implementation: 'You are the sole implementation role. Modify the shared workspace, address every supplied finding, and verify the changed behavior.',
   review: 'You are an adversarial code reviewer. Read the objective, accepted plan, implementation report, actual code, and call sites. Never modify files; pass only with zero findings.',
-  qa: 'You are an independent browser QA engineer. Use the provided browser tools against the required URL, verify observable acceptance criteria, and never modify source files.',
+  qa: 'You are an independent browser QA engineer. Use the provided browser tools against the QA target URL (given or discovered from the workspace and plan), verify observable acceptance criteria, and never modify source files.',
 }
 
 const WORKFLOW_META = {
@@ -363,19 +363,26 @@ interface EvidenceCall {
   invalidated: boolean
 }
 
-function qaStatusFromChildResult(result: unknown): 'pass' | 'changes-required' | 'blocked' | undefined {
+interface QaVerdict {
+  readonly status: 'pass' | 'changes-required' | 'blocked'
+  readonly discoveredUrl: string
+}
+
+function qaVerdictFromChildResult(result: unknown): QaVerdict | undefined {
   if (!isRecord(result) || result['stopReason'] !== 'completed') return undefined
   const structured = result['structured']
   if (!isRecord(structured)) return undefined
   const status = structured['status']
-  return status === 'pass' || status === 'changes-required' || status === 'blocked' ? status : undefined
+  if (status !== 'pass' && status !== 'changes-required' && status !== 'blocked') return undefined
+  const discoveredUrl = typeof structured['discoveredUrl'] === 'string' ? structured['discoveredUrl'] : ''
+  return { status, discoveredUrl }
 }
 
 function inspectQaEvidence(
   session: Session,
   navigationTool: string,
   evidenceTools: ReadonlySet<string>,
-  qaUrl: string | undefined,
+  targetUrl: string,
 ): QaEvidenceObservation {
   const navigationCalls = new Map<string, NavigationCall>()
   const evidenceCalls = new Map<string, EvidenceCall>()
@@ -387,10 +394,10 @@ function inspectQaEvidence(
     successfulNavigationAt: undefined as number | undefined,
   }
   const recordNavigationStart = (callId: string, argumentsValue: unknown): void => {
-    // Without an explicit qaUrl every navigation of the navigation tool is the
-    // target: QA discovered the deliverable itself and must still demonstrate
-    // real navigation followed by observed evidence.
-    const target = qaUrl === undefined ? true : matchesQaUrl(argumentsValue, qaUrl)
+    // Evidence is always pinned to one concrete target: the explicit qaUrl, or
+    // the discoveredUrl the QA child declared. A navigation to anything else
+    // cannot certify evidence about the deliverable.
+    const target = matchesQaUrl(argumentsValue, targetUrl)
     navigationCalls.set(callId, { target })
     if (target) state.attemptedTargetNavigation = true
     state.successfulTargetNavigation = false
@@ -455,9 +462,27 @@ function validateQaEvidence(
   evidenceTools: ReadonlySet<string>,
   qaUrl: string | undefined,
   status: 'pass' | 'changes-required' | 'blocked',
+  discoveredUrl: string,
 ): void {
-  const observation = inspectQaEvidence(session, navigationTool, evidenceTools, qaUrl)
-  const targetLabel = qaUrl ?? 'the deliverable'
+  // Discovery mode: an honest "no deliverable target is discoverable" blocker
+  // needs no navigation evidence — there is nothing to navigate to.
+  if (qaUrl === undefined && status === 'blocked' && discoveredUrl === '') return
+  const targetUrl = qaUrl ?? discoveredUrl
+  if (targetUrl === '') {
+    throw new Error(`QA child "${session.id}" reported ${status} without a target URL`)
+  }
+  if (qaUrl === undefined) {
+    let validTarget = false
+    try {
+      const parsed = new URL(targetUrl)
+      validTarget = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    } catch {
+      // fall through to the invalid-discovery error
+    }
+    if (!validTarget) throw new Error(`QA child "${session.id}" reported an invalid discoveredUrl`)
+  }
+  const observation = inspectQaEvidence(session, navigationTool, evidenceTools, targetUrl)
+  const targetLabel = targetUrl
   if (status === 'blocked') {
     if (observation.failedTargetNavigation) return
     if (observation.successfulTargetNavigation && observation.successfulEvidenceAfterNavigation) return
@@ -547,9 +572,9 @@ export function apply(ctx: Context, config: Config): void {
       const validateChildResult = (info: WorkflowChildValidationInfo, result: unknown): void => {
         const session = sessionForChild(ctx, parent, info)
         if (info.phase !== 'QA') return
-        const status = qaStatusFromChildResult(result)
-        if (status === undefined) return
-        validateQaEvidence(session, qaNavigationTool, qaEvidenceTools, qaUrl, status)
+        const verdict = qaVerdictFromChildResult(result)
+        if (verdict === undefined) return
+        validateQaEvidence(session, qaNavigationTool, qaEvidenceTools, qaUrl, verdict.status, verdict.discoveredUrl)
       }
       const run: WorkflowRun = ctx.workflowEngine.start({
         script: AOP_DELIVERY_WORKFLOW_SCRIPT,
