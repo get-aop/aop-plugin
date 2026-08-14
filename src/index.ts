@@ -330,7 +330,7 @@ function boundedError(error: unknown, maxChars: number): Error {
   return new Error(message.length > available ? message.slice(0, available) : message)
 }
 
-function matchesQaUrl(argumentsValue: unknown, qaUrl: string): boolean {
+function matchesTargetUrl(argumentsValue: unknown, targetUrl: string): boolean {
   let parsed: unknown = argumentsValue
   if (typeof argumentsValue === 'string') {
     try {
@@ -341,7 +341,7 @@ function matchesQaUrl(argumentsValue: unknown, qaUrl: string): boolean {
   }
   if (!isRecord(parsed) || typeof parsed['url'] !== 'string') return false
   try {
-    return new URL(parsed['url']).href === qaUrl
+    return new URL(parsed['url']).href === targetUrl
   } catch {
     return false
   }
@@ -397,7 +397,7 @@ function inspectQaEvidence(
     // Evidence is always pinned to one concrete target: the explicit qaUrl, or
     // the discoveredUrl the QA child declared. A navigation to anything else
     // cannot certify evidence about the deliverable.
-    const target = matchesQaUrl(argumentsValue, targetUrl)
+    const target = matchesTargetUrl(argumentsValue, targetUrl)
     navigationCalls.set(callId, { target })
     if (target) state.attemptedTargetNavigation = true
     state.successfulTargetNavigation = false
@@ -467,19 +467,32 @@ function validateQaEvidence(
   // Discovery mode: an honest "no deliverable target is discoverable" blocker
   // needs no navigation evidence — there is nothing to navigate to.
   if (qaUrl === undefined && status === 'blocked' && discoveredUrl === '') return
-  const targetUrl = qaUrl ?? discoveredUrl
-  if (targetUrl === '') {
-    throw new Error(`QA child "${session.id}" reported ${status} without a target URL`)
-  }
-  if (qaUrl === undefined) {
-    let validTarget = false
-    try {
-      const parsed = new URL(targetUrl)
-      validTarget = parsed.protocol === 'http:' || parsed.protocol === 'https:'
-    } catch {
-      // fall through to the invalid-discovery error
+  let targetUrl: string
+  if (qaUrl !== undefined) {
+    targetUrl = qaUrl
+    // With an explicit target the artifact must name the URL that was tested.
+    if (discoveredUrl !== '') {
+      let matches = false
+      try {
+        matches = new URL(discoveredUrl).href === qaUrl
+      } catch {
+        // fall through to the mismatch error
+      }
+      if (!matches) {
+        throw new Error(`QA child "${session.id}" reported a discoveredUrl that does not match qaUrl`)
+      }
     }
-    if (!validTarget) throw new Error(`QA child "${session.id}" reported an invalid discoveredUrl`)
+  } else {
+    let parsed: URL
+    try {
+      parsed = new URL(discoveredUrl)
+    } catch {
+      throw new Error(`QA child "${session.id}" reported an invalid discoveredUrl`)
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`QA child "${session.id}" reported an invalid discoveredUrl`)
+    }
+    targetUrl = parsed.href
   }
   const observation = inspectQaEvidence(session, navigationTool, evidenceTools, targetUrl)
   const targetLabel = targetUrl

@@ -98,12 +98,14 @@ function unique(values) {
 }
 function validDiscoveredUrl(value) {
   if (value === '') return true
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
+  // The workflow script runs in a bare vm realm without the Node URL global:
+  // validate structurally here and let the host parse and normalize rigorously.
+  const schemeEnd = value.indexOf('://')
+  if (schemeEnd < 0) return false
+  const scheme = value.slice(0, schemeEnd)
+  if (scheme !== 'http' && scheme !== 'https') return false
+  const rest = value.slice(schemeEnd + 3)
+  return rest.length > 0 && rest.indexOf(' ') === -1 && rest.indexOf('\t') === -1
 }
 function sized(value, stage) {
   const length = JSON.stringify(value).length
@@ -357,7 +359,7 @@ while (true) {
   ]
   if (args.qaUrl === undefined) {
     qaPromptParts.push(
-      'Discover the deliverable target yourself: inspect the workspace (package.json scripts, README, server config, and the plan acceptance criteria verification methods) to find how the app runs and which URL it serves, then navigate a real browser to it.',
+      'Discover the deliverable target yourself: inspect the workspace (package.json scripts, README, server config, and the plan acceptance criteria verification methods) to find how the app runs and which URL it serves, then navigate a real browser to it. If no deliverable target is discoverable, return blocked with discoveredUrl "" and a concrete blocker.',
     )
   }
   if (args.qaInstructions === undefined) {
@@ -370,7 +372,7 @@ while (true) {
     )
   }
   qaPromptParts.push(
-    'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)); if no deliverable target is discoverable, return blocked with discoveredUrl "" and a concrete blocker. Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
+    'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)). Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
   )
   const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())

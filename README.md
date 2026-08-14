@@ -17,7 +17,7 @@ Each role runs with independent context, specific model/thinking profiles, tailo
 - **Evaluator-Gated Ping-Pong**: Adversarial code reviewer and independent browser QA engineer reject flawed implementations. Any reported finding forces an implementation pass with an exact disposition requirement.
 - **Review Precedes QA**: Any code modification must pass code review with 0 findings before Browser QA can execute.
 - **Mandatory Retesting**: QA tracks every prior defect ID and verifies observable resolution before certification.
-- **Verified Browser QA**: Browser QA strictly requires authenticated navigation to the target `qaUrl` followed by post-navigation browser interaction and snapshot evidence.
+- **Verified Browser QA**: Browser QA requires real navigation to the QA target (the given `qaUrl`, or one it discovers and declares itself) followed by post-navigation browser interaction and snapshot evidence. Evidence is pinned to the declared target — navigation and observed evidence must settle against exactly that URL.
 - **Model Routing**: Configure distinct models/providers per stage:
   - **Plan**: `sol-xhigh` (deep reasoning architecture)
   - **Implementation**: `deepseek-v4-flash-max` (fast, focused coding writer)
@@ -144,6 +144,8 @@ Invoked by an agent or user to execute the complete delivery lifecycle:
 | `qaUrl` | `string` | No | Absolute HTTP(S) target URL for browser QA. When omitted, QA discovers the deliverable itself — it inspects the workspace (package.json scripts, README, plan acceptance criteria) to find how the app runs and which URL it serves, and declares it in the QA artifact's `discoveredUrl`. Browser evidence is always pinned to one concrete target (given or discovered). |
 | `qaInstructions` | `string` | No | Concrete browser behaviors, interactions, and expected outcomes. When omitted, QA derives them from the plan's acceptance criteria and reports them under `QA-INSTRUCTIONS`. |
 | `maxCycles` | `number` | No | Optional implementation-pass ceiling (bounded by deployment policy). |
+
+> **Discovery-mode trust boundary**: when `qaUrl` is omitted, the target is *declared by the QA model* in the artifact's `discoveredUrl`. The workflow enforces that navigation and evidence are pinned to exactly that declared URL (no navigation elsewhere can certify evidence), but it cannot verify that the declared URL is genuinely the deliverable — target *authenticity* is trusted to the QA model. For strict environments, always pass an explicit `qaUrl`.
 
 ---
 
