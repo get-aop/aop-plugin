@@ -2,7 +2,7 @@
  * AOP Software Delivery Client Plugin for DeepSeek Harness Web UI.
  * Registers the AOP Delivery Settings Card into `settings.plugin.item`.
  *
- * @module @get-aop/dsh-plugin/client
+ * @module @get-aop/aop-plugin/client
  */
 
 import type { Context } from '@deepseek-ai/cordis'

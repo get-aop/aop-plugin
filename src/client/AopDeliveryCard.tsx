@@ -2,7 +2,7 @@
  * AOP Software Delivery Settings Card Component for DeepSeek Harness Web UI.
  * Provides interactive model and parameter selection for all workflow phases.
  *
- * @module @get-aop/dsh-plugin/client/AopDeliveryCard
+ * @module @get-aop/aop-plugin/client/AopDeliveryCard
  */
 
 import { useSyncExternalStore, useState } from 'react'

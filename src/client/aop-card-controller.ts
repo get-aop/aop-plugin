@@ -2,7 +2,7 @@
  * Form controller for the AOP Software Delivery settings card.
  * Manages drafts, field overrides, validation, and save/discard operations.
  *
- * @module @get-aop/dsh-plugin/client/controller
+ * @module @get-aop/aop-plugin/client/controller
  */
 
 import type {

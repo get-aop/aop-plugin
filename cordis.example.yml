@@ -2,7 +2,7 @@
 # Mount this entry into your cordis.yml or profile overlay.
 
 - id: aop-delivery
-  name: '@get-aop/dsh-plugin'
+  name: '@get-aop/aop-plugin'
   config:
     subagentProvider: spawn
     maxCycles: 8

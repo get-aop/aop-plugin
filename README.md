@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Homepage](https://img.shields.io/badge/AOP-getaop.com-purple)](https://getaop.com)
 
-**@get-aop/dsh-plugin** is a software delivery workflow plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and [Cordis](https://cordis.moe). It automates the multi-agent software engineering lifecycle:
+**@get-aop/aop-plugin** is a software delivery workflow plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) and [Cordis](https://cordis.moe). It automates the multi-agent software engineering lifecycle:
 
 $$\text{Plan} \longrightarrow \text{Implementation} \longleftrightarrow \text{Review} \longleftrightarrow \text{Browser QA}$$
 
@@ -50,10 +50,10 @@ stateDiagram-v2
 
 ### 1. Install
 
-Add `@get-aop/dsh-plugin` to your DeepSeek Harness environment:
+Add `@get-aop/aop-plugin` to your DeepSeek Harness environment:
 
 ```bash
-pnpm add @get-aop/dsh-plugin
+pnpm add @get-aop/aop-plugin
 ```
 
 ### 2. Configure in `cordis.yml`
@@ -62,7 +62,7 @@ Mount the plugin in your `cordis.yml` profile or overlay:
 
 ```yaml
 - id: aop-delivery
-  name: '@get-aop/dsh-plugin'
+  name: '@get-aop/aop-plugin'
   config:
     subagentProvider: spawn
     maxCycles: 8

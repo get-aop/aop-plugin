@@ -1,6 +1,6 @@
 /**
  * Types and interfaces for the AOP Software Delivery workflow plugin.
- * @module @get-aop/dsh-plugin/types
+ * @module @get-aop/aop-plugin/types
  */
 
 export type RoleName = 'plan' | 'implementation' | 'review' | 'qa'

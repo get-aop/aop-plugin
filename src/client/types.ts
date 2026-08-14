@@ -1,6 +1,6 @@
 /**
  * Client-side settings and UI types for AOP Software Delivery Plugin.
- * @module @get-aop/dsh-plugin/client/types
+ * @module @get-aop/aop-plugin/client/types
  */
 
 export interface RoleModelSettings {

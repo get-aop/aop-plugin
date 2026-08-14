@@ -1,5 +1,5 @@
 {
-  "name": "@get-aop/dsh-plugin",
+  "name": "@get-aop/aop-plugin",
   "version": "0.1.0",
   "description": "AOP software delivery workflow plugin for DeepSeek Harness — automated Plan -> Implementation -> Review -> Browser QA loops",
   "type": "module",

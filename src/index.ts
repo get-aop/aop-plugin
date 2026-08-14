@@ -2,7 +2,7 @@
  * AOP Software Delivery Workflow Plugin for DeepSeek Harness / Cordis.
  * Automated multi-agent workflow: Plan -> Implementation -> Review -> Browser QA loops.
  *
- * @module @get-aop/dsh-plugin
+ * @module @get-aop/aop-plugin
  */
 
 import type { Context } from '@deepseek-ai/cordis'
