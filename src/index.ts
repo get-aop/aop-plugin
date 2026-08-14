@@ -648,45 +648,45 @@ export function apply(ctx: Context, config: Config): void {
   ctx.tools.register(toolDefinition)
 
   const activeRuns = new Set<Promise<void>>()
-  const registerAopCommand = () => {
-    ctx.commands.register({
-      name: 'aop',
-      description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
-      input: { hint: '<objective>' },
-      handler: (invocation: any) => {
-        const objective = invocation.rawInput.trim()
-        if (objective.length === 0) {
-          return Promise.resolve({ kind: 'error', text: 'Usage: /aop <objective>' })
+  const registerAopCommand = () => ctx.commands.register({
+    name: 'aop',
+    description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
+    input: { hint: '<objective>' },
+    handler: (invocation: any) => {
+      const objective = invocation.rawInput.trim()
+      if (objective.length === 0) {
+        return Promise.resolve({ kind: 'error', text: 'Usage: /aop <objective>' })
+      }
+      const run = (async () => {
+        const result = await ctx.tools.execute({
+          signal: invocation.signal,
+          callId: invocation.commandId,
+          name: 'aop_delivery',
+          arguments: { objective },
+          agent: invocation.agent,
+        })
+        if (result.isError) {
+          const message = String(result.error?.message ?? '').trim()
+          return { kind: 'error', text: message.length > 0 ? message : 'AOP delivery failed' }
         }
-        const run = (async () => {
-          const result = await ctx.tools.execute({
-            signal: invocation.signal,
-            callId: invocation.commandId,
-            name: 'aop_delivery',
-            arguments: { objective },
-            agent: invocation.agent,
-          })
-          if (result.isError) {
-            const message = String(result.error?.message ?? '').trim()
-            return { kind: 'error', text: message.length > 0 ? message : 'AOP delivery failed' }
-          }
-          const cycles = result.value?.result?.cycles
-          const summary = cycles !== undefined && typeof cycles.implementation === 'number'
-            ? `AOP delivery completed after ${cycles.implementation} implementation pass(es) (${cycles.review} review, ${cycles.qa} QA).`
-            : 'AOP delivery completed.'
-          return { kind: 'success', text: summary }
-        })()
-        const tracked = run.then(() => { activeRuns.delete(tracked) })
-        activeRuns.add(tracked)
-        return run
-      },
-    })
-  }
+        const cycles = result.value?.result?.cycles
+        const summary = cycles !== undefined && typeof cycles.implementation === 'number'
+          ? `AOP delivery completed after ${cycles.implementation} implementation pass(es) (${cycles.review} review, ${cycles.qa} QA).`
+          : 'AOP delivery completed.'
+        return { kind: 'success', text: summary }
+      })()
+      const retire = () => { activeRuns.delete(tracked) }
+      const tracked = run.then(retire, retire)
+      activeRuns.add(tracked)
+      return run
+    },
+  })
 
-  // Drain in-flight /aop handlers before the plugin fiber unloads (LIFO with
-  // the command registration, mirroring command-compact).
+  // Yield the drain disposer first, then the registration disposer, so the
+  // effect's intra-effect teardown unregisters the command before draining
+  // in-flight handlers (mirroring command-compact).
   ctx.effect(function* () {
     yield async () => { await Promise.allSettled([...activeRuns]) }
-    registerAopCommand()
-  })
+    yield registerAopCommand()
+  }, 'aop command lifecycle')
 }

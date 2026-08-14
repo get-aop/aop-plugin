@@ -6,7 +6,7 @@ declare module '@deepseek-ai/cordis' {
     systemPrompt: any
     sessions: any
     commands: any
-    effect: (fn: any) => any
+    effect: (fn: any, label?: string) => any
     slots?: {
       register?: (options: any, component: any) => void
       inject?: (name: string, fn: any) => void

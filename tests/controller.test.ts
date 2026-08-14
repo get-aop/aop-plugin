@@ -181,6 +181,7 @@ describe('AopCardController', () => {
 describe('/aop slash command', () => {
   async function mountHostAop(executeStub: (args: any) => Promise<any>) {
     const registered: any[] = []
+    const yields: unknown[] = []
     const ctx = {
       systemPrompt: { section: () => {} },
       tools: {
@@ -188,12 +189,15 @@ describe('/aop slash command', () => {
         execute: executeStub,
       },
       commands: {
-        register: (def: any) => { registered.push(def) },
+        register: (def: any) => { registered.push(def); return () => {} },
       },
       effect: (fn: any) => {
         const iterator = fn()
         let step = iterator.next()
-        while (!step.done) step = iterator.next()
+        while (!step.done) {
+          yields.push(step.value)
+          step = iterator.next()
+        }
       },
     }
     const { apply: applyHost } = await import('../src/index')
@@ -211,13 +215,15 @@ describe('/aop slash command', () => {
         },
       },
     })
-    return { registered }
+    return { registered, yields }
   }
-
   it('registers the command and rejects empty objectives', async () => {
-    const { registered } = await mountHostAop(async () => { throw new Error('must not run') })
+    const { registered, yields } = await mountHostAop(async () => { throw new Error('must not run') })
     expect(registered).toHaveLength(1)
     expect(registered[0]).toMatchObject({ name: 'aop' })
+    expect(yields).toHaveLength(2)
+    expect(typeof yields[0]).toBe('function')
+    expect(typeof yields[1]).toBe('function')
     const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
     expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
   })
