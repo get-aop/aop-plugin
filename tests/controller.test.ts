@@ -182,6 +182,7 @@ describe('/aop slash command', () => {
   async function mountHostAop(executeStub: (args: any) => Promise<any>) {
     const registered: any[] = []
     const yields: unknown[] = []
+    const regDisposer = () => {}
     const ctx = {
       systemPrompt: { section: () => {} },
       tools: {
@@ -189,7 +190,7 @@ describe('/aop slash command', () => {
         execute: executeStub,
       },
       commands: {
-        register: (def: any) => { registered.push(def); return () => {} },
+        register: (def: any) => { registered.push(def); return regDisposer },
       },
       effect: (fn: any) => {
         const iterator = fn()
@@ -222,8 +223,11 @@ describe('/aop slash command', () => {
     expect(registered).toHaveLength(1)
     expect(registered[0]).toMatchObject({ name: 'aop' })
     expect(yields).toHaveLength(2)
-    expect(typeof yields[0]).toBe('function')
-    expect(typeof yields[1]).toBe('function')
+    expect(yields[0]).toBeInstanceOf(Function)
+    expect(yields[1]).toBeInstanceOf(Function)
+    // Order matters: the registration disposer must be yielded AFTER the drain
+    // so intra-effect teardown unregisters the command before draining.
+    expect((yields[1] as any).name).toBe('regDisposer')
     const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
     expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
   })
