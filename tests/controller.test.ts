@@ -2,12 +2,23 @@
  * Unit and component tests for AOP Delivery Card Controller and Client Plugin.
  */
 
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import {
   AopCardController,
   DEFAULT_ROLE_MODELS,
   apply as applyClient,
 } from '../src/client/index'
+
+// The host entry imports harness packages that are not installable in this
+// standalone repo; stub their runtime surface before the dynamic import below.
+// Dynamic import is required: bun applies mock.module only to imports that
+// happen after registration, so the host entry cannot be statically imported.
+const zStub = new Proxy(function () {}, {
+  get: (_target, prop) => (prop === 'then' ? undefined : () => zStub),
+  apply: () => zStub,
+})
+mock.module('@deepseek-ai/schemastery', () => ({ default: zStub }))
+mock.module('@deepseek-ai/dsh-tools', () => ({ defineTool: (options: any) => options }))
 
 describe('AopCardController', () => {
   it('initializes with default role models and valid snapshot', () => {
@@ -164,5 +175,72 @@ describe('AopCardController', () => {
       id: 'aop-delivery',
       order: 50,
     })
+  })
+})
+
+describe('/aop slash command', () => {
+  async function mountHostAop(executeStub: (args: any) => Promise<any>) {
+    const registered: any[] = []
+    const ctx = {
+      systemPrompt: { section: () => {} },
+      tools: {
+        register: () => {},
+        execute: executeStub,
+      },
+      commands: {
+        register: (def: any) => { registered.push(def) },
+      },
+      effect: (fn: any) => {
+        const iterator = fn()
+        let step = iterator.next()
+        while (!step.done) step = iterator.next()
+      },
+    }
+    const { apply: applyHost } = await import('../src/index')
+    applyHost(ctx, {
+      roles: {
+        plan: { model: 'p', tools: [{ name: 'read', access: 'read' }] },
+        implementation: { model: 'i', tools: [{ name: 'write', access: 'write' }] },
+        review: { model: 'r', tools: [{ name: 'read', access: 'read' }] },
+        qa: {
+          model: 'q',
+          tools: [
+            { name: 'browser_navigate', access: 'read', browserNavigation: true },
+            { name: 'browser_snapshot', access: 'read', browserEvidence: true },
+          ],
+        },
+      },
+    })
+    return { registered }
+  }
+
+  it('registers the command and rejects empty objectives', async () => {
+    const { registered } = await mountHostAop(async () => { throw new Error('must not run') })
+    expect(registered).toHaveLength(1)
+    expect(registered[0]).toMatchObject({ name: 'aop' })
+    const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
+    expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
+  })
+
+  it('executes aop_delivery with the command id and maps success', async () => {
+    const seen: any[] = []
+    const { registered } = await mountHostAop(async (input) => {
+      seen.push(input)
+      return {
+        isError: false,
+        content: [{ type: 'text', text: 'done' }],
+        value: { runId: 'run-1', result: { cycles: { implementation: 2, review: 2, qa: 1 } } },
+      }
+    })
+    const result = await registered[0].handler({ rawInput: '  build a todo app ', commandId: 'cmd-42', agent: { id: 'a1' }, signal: new AbortController().signal })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ name: 'aop_delivery', arguments: { objective: 'build a todo app' }, callId: 'cmd-42' })
+    expect(result).toEqual({ kind: 'success', text: 'AOP delivery completed after 2 implementation pass(es) (2 review, 1 QA).' })
+  })
+
+  it('maps tool errors to non-empty command errors', async () => {
+    const { registered } = await mountHostAop(async () => ({ isError: true, error: { message: '  ' } }))
+    const result = await registered[0].handler({ rawInput: 'x', commandId: 'cmd-3', agent: {}, signal: new AbortController().signal })
+    expect(result).toEqual({ kind: 'error', text: 'AOP delivery failed' })
   })
 })

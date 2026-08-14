@@ -5,8 +5,8 @@ declare module '@deepseek-ai/cordis' {
     subagents: any
     systemPrompt: any
     sessions: any
-    commands?: any
-    inject?: (names: string[], callback: (ctx: any) => void) => void
+    commands: any
+    effect: (fn: any) => any
     slots?: {
       register?: (options: any, component: any) => void
       inject?: (name: string, fn: any) => void
