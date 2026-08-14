@@ -15,9 +15,9 @@ import type { ToolCallView, ToolPresentationMode, ToolResultView } from '@deepse
 import type { WorkflowChildValidationInfo, WorkflowResult, WorkflowRun } from '@deepseek-ai/dsh-workflow'
 import type {} from '@deepseek-ai/dsh-subagent'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script.ts'
+import { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script'
 import type {
-  Config,
+  Config as ConfigInterface,
   DeliveryCallArgs,
   DeliveryCycles,
   DeliveryFinding,
@@ -27,10 +27,21 @@ import type {
   RoleName,
   ToolAccess,
   ToolGrant,
-} from './types.ts'
+} from './types'
 
-export * from './types.ts'
-export { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script.ts'
+export interface Config extends ConfigInterface {}
+export type {
+  DeliveryCallArgs,
+  DeliveryCycles,
+  DeliveryFinding,
+  DeliveryTerminalFailure,
+  DeliveryTerminalResult,
+  RoleConfig,
+  RoleName,
+  ToolAccess,
+  ToolGrant,
+}
+export { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script'
 
 export const name = 'aop-delivery-workflow'
 export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt', 'sessions']
@@ -46,11 +57,11 @@ const roleConfigSchema = z.object({
   provider: z.string(),
   model: z.string(),
   toolPresentation: z.union(['native', 'code', 'both'] as const),
-  tools: z.array(toolGrantSchema),
+  tools: z.array(toolGrantSchema).required(),
 })
 
 /** Schemastery configuration for the AOP delivery workflow plugin. */
-export const Config: z<Config> = z.object({
+export const Config = z.object({
   subagentProvider: z.string().default('spawn'),
   maxCycles: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
   maxFindings: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(64),
@@ -291,7 +302,7 @@ function workflowError(result: WorkflowResult): string | undefined {
     case 'completed': return undefined
     case 'cancelled': return `Delivery workflow was cancelled${result.error === undefined ? '' : ` (${result.error})`}`
     case 'error': return `Delivery workflow failed: ${result.error ?? 'unknown error'}`
-    default: return `Delivery workflow ended abnormally (${String(result.stopReason satisfies never)})`
+    default: return `Delivery workflow ended abnormally (${String(result.stopReason)})`
   }
 }
 
@@ -510,9 +521,9 @@ export function apply(ctx: Context, config: Config): void {
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: OUTPUT_PROPERTIES },
-      render: (_args, value) => [{ type: 'text', text: renderSuccess(value.result) }],
+      render: (_args: unknown, value: any) => [{ type: 'text', text: renderSuccess(value.result) }],
     },
-    async execute(args, exec) {
+    async execute(args: any, exec: any) {
       const parent = exec.agent
       if (parent === undefined) throw new Error('AOP delivery workflow requires a calling agent (exec.agent was undefined)')
       const objective = normalizedText(args.objective, 'objective')
@@ -564,6 +575,7 @@ export function apply(ctx: Context, config: Config): void {
       const onAbort = (): void => { run.cancel('parent step aborted') }
       exec.signal.addEventListener('abort', onAbort, { once: true })
       if (exec.signal.aborted) run.cancel('parent step aborted')
+      let runError: unknown
       try {
         const settled = await run.result
         const error = workflowError(settled)
@@ -575,13 +587,16 @@ export function apply(ctx: Context, config: Config): void {
         requireBoundedResult(renderSuccess(terminal), resolved.maxResultChars)
         return { runId: run.id, agentsStarted: settled.agentsStarted, result: terminal as unknown as JsonValue }
       } catch (error: unknown) {
+        runError = error
         throw boundedError(error, resolved.maxResultChars)
       } finally {
         exec.signal.removeEventListener('abort', onAbort)
         try {
           await run.dispose()
-        } catch (error: unknown) {
-          throw boundedError(error, resolved.maxResultChars)
+        } catch (disposeErr: unknown) {
+          if (runError === undefined) {
+            throw boundedError(disposeErr, resolved.maxResultChars)
+          }
         }
       }
     },
@@ -590,9 +605,4 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   ctx.tools.register(toolDefinition)
-  // Also register alias 'delivery_workflow' for compatibility
-  ctx.tools.register({
-    ...toolDefinition,
-    name: 'delivery_workflow',
-  })
 }

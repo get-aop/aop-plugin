@@ -154,7 +154,9 @@ function validateImplementation(value, pendingIds, feedbackDriven) {
     throw new Error('initial implementation cannot name pending findings')
   }
   if (value.status === 'changed') {
-    if (value.changedFiles.length === 0 || value.blocker !== '') throw new Error('changed implementation needs changed files and no blocker')
+    if (value.changedFiles.length === 0 || value.verification.length === 0 || value.blocker !== '') {
+      throw new Error('changed implementation needs changed files, focused verification, and no blocker')
+    }
   } else if (value.status === 'unchanged') {
     if (value.changedFiles.length !== 0 || value.blocker !== '') throw new Error('unchanged implementation needs no changed files or blocker')
   } else if (value.status === 'blocked') {
@@ -230,25 +232,30 @@ function findingKey(finding) {
   return JSON.stringify(['id', 'severity', 'summary', 'evidence', 'location', 'remediation'].map(key => finding[key]))
 }
 function mergeFindings(...groups) {
-  const byId = new Map()
+  const merged = []
+  const seenKeys = new Set()
   for (const group of groups) {
     for (const finding of group.findings) {
-      const entry = byId.get(finding.id) || []
-      if (!entry.some(candidate => candidate.key === findingKey(finding))) {
-        entry.push({ finding, source: group.source, key: findingKey(finding) })
-        byId.set(finding.id, entry)
+      const key = group.source + ':' + findingKey(finding)
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key)
+        merged.push({ ...finding, id: group.source + ':' + finding.id })
       }
     }
   }
-  const merged = []
-  for (const entries of byId.values()) {
-    if (entries.length === 1) {
-      merged.push(entries[0].finding)
-    } else {
-      for (const entry of entries) merged.push({ ...entry.finding, id: entry.source + ':' + entry.finding.id })
+  const uniqueIdMerged = []
+  const usedIds = new Set()
+  for (const item of merged) {
+    let finalId = item.id
+    let counter = 1
+    while (usedIds.has(finalId)) {
+      counter++
+      finalId = item.id + '-' + counter
     }
+    usedIds.add(finalId)
+    uniqueIdMerged.push({ ...item, id: finalId })
   }
-  return merged
+  return uniqueIdMerged
 }
 function terminalFindings() {
   return mergeFindings(
