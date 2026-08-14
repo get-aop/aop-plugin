@@ -19,6 +19,7 @@ const zStub = new Proxy(function () {}, {
 })
 mock.module('@deepseek-ai/schemastery', () => ({ default: zStub }))
 mock.module('@deepseek-ai/dsh-tools', () => ({ defineTool: (options: any) => options }))
+mock.module('@deepseek-ai/dsh-llm', () => ({ createUserMessage: (input: any) => input }))
 
 describe('AopCardController', () => {
   it('initializes with default role models and valid snapshot', () => {
@@ -179,7 +180,7 @@ describe('AopCardController', () => {
 })
 
 describe('/aop slash command', () => {
-  async function mountHostAop(executeStub: (args: any) => Promise<any>) {
+  async function mountHostAop() {
     const registered: any[] = []
     const yields: unknown[] = []
     const regDisposer = () => {}
@@ -187,7 +188,6 @@ describe('/aop slash command', () => {
       systemPrompt: { section: () => {} },
       tools: {
         register: () => {},
-        execute: executeStub,
       },
       commands: {
         register: (def: any) => { registered.push(def); return regDisposer },
@@ -218,39 +218,31 @@ describe('/aop slash command', () => {
     })
     return { registered, yields }
   }
-  it('registers the command and rejects empty objectives', async () => {
-    const { registered, yields } = await mountHostAop(async () => { throw new Error('must not run') })
+
+  it('registers the command, yields its disposer, and rejects empty objectives', async () => {
+    const { registered, yields } = await mountHostAop()
     expect(registered).toHaveLength(1)
     expect(registered[0]).toMatchObject({ name: 'aop' })
-    expect(yields).toHaveLength(2)
-    expect(yields[0]).toBeInstanceOf(Function)
-    expect(yields[1]).toBeInstanceOf(Function)
-    // Order matters: the registration disposer must be yielded AFTER the drain
-    // so intra-effect teardown unregisters the command before draining.
-    expect((yields[1] as any).name).toBe('regDisposer')
+    expect(yields).toHaveLength(1)
+    expect((yields[0] as any).name).toBe('regDisposer')
     const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
     expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
   })
 
-  it('executes aop_delivery with the command id and maps success', async () => {
-    const seen: any[] = []
-    const { registered } = await mountHostAop(async (input) => {
-      seen.push(input)
-      return {
-        isError: false,
-        content: [{ type: 'text', text: 'done' }],
-        value: { runId: 'run-1', result: { cycles: { implementation: 2, review: 2, qa: 1 } } },
-      }
+  it('routes the objective to the agent as a followup and acks immediately', async () => {
+    const followups: any[] = []
+    const { registered } = await mountHostAop()
+    const result = await registered[0].handler({
+      rawInput: '  build a todo app ',
+      commandId: 'cmd-42',
+      agent: { followup: (message: any) => { followups.push(message) } },
+      signal: new AbortController().signal,
     })
-    const result = await registered[0].handler({ rawInput: '  build a todo app ', commandId: 'cmd-42', agent: { id: 'a1' }, signal: new AbortController().signal })
-    expect(seen).toHaveLength(1)
-    expect(seen[0]).toMatchObject({ name: 'aop_delivery', arguments: { objective: 'build a todo app' }, callId: 'cmd-42' })
-    expect(result).toEqual({ kind: 'success', text: 'AOP delivery completed after 2 implementation pass(es) (2 review, 1 QA).' })
-  })
-
-  it('maps tool errors to non-empty command errors', async () => {
-    const { registered } = await mountHostAop(async () => ({ isError: true, error: { message: '  ' } }))
-    const result = await registered[0].handler({ rawInput: 'x', commandId: 'cmd-3', agent: {}, signal: new AbortController().signal })
-    expect(result).toEqual({ kind: 'error', text: 'AOP delivery failed' })
+    expect(followups).toHaveLength(1)
+    expect(followups[0].content[0].text).toContain('aop_delivery')
+    expect(followups[0].content[0].text).toContain('build a todo app')
+    expect(followups[0].source).toMatchObject({ kind: 'plugin', plugin: 'aop' })
+    expect(result.kind).toBe('success')
+    expect((result as any).text).toContain('AOP delivery started')
   })
 })

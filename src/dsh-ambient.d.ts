@@ -49,6 +49,7 @@ declare module '@deepseek-ai/dsh-llm' {
     type: string
     [key: string]: any
   }
+  export function createUserMessage(input: any): any
 }
 
 declare module '@deepseek-ai/dsh-session' {

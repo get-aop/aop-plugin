@@ -9,12 +9,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, Session } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolCallView, ToolPresentationMode, ToolResultView } from '@deepseek-ai/dsh-tools'
 import type { WorkflowChildValidationInfo, WorkflowResult, WorkflowRun } from '@deepseek-ai/dsh-workflow'
 import type {} from '@deepseek-ai/dsh-subagent'
-import type {} from '@deepseek-ai/dsh-system-prompt'
 import { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script'
 import type {
   Config as ConfigInterface,
@@ -647,7 +647,6 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(toolDefinition)
 
-  const activeRuns = new Set<Promise<void>>()
   const registerAopCommand = () => ctx.commands.register({
     name: 'aop',
     description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
@@ -657,36 +656,21 @@ export function apply(ctx: Context, config: Config): void {
       if (objective.length === 0) {
         return Promise.resolve({ kind: 'error', text: 'Usage: /aop <objective>' })
       }
-      const run = (async () => {
-        const result = await ctx.tools.execute({
-          signal: invocation.signal,
-          callId: invocation.commandId,
-          name: 'aop_delivery',
-          arguments: { objective },
-          agent: invocation.agent,
-        })
-        if (result.isError) {
-          const message = String(result.error?.message ?? '').trim()
-          return { kind: 'error', text: message.length > 0 ? message : 'AOP delivery failed' }
-        }
-        const cycles = result.value?.result?.cycles
-        const summary = cycles !== undefined && typeof cycles.implementation === 'number'
-          ? `AOP delivery completed after ${cycles.implementation} implementation pass(es) (${cycles.review} review, ${cycles.qa} QA).`
-          : 'AOP delivery completed.'
-        return { kind: 'success', text: summary }
-      })()
-      const retire = () => { activeRuns.delete(tracked) }
-      const tracked = run.then(retire, retire)
-      activeRuns.add(tracked)
-      return run
+      // Route through the agent so the workflow runs inside the normal loop:
+      // tool calls, workflow phases, and child sessions then stream in the
+      // trajectory instead of running silently behind the command plane.
+      invocation.agent.followup(createUserMessage({
+        content: [{ type: 'text', text: 'Run the AOP delivery workflow (call the aop_delivery tool) for this objective:\n' + objective }],
+        source: { kind: 'plugin', plugin: 'aop', form: 'notice', summary: 'AOP delivery requested: ' + objective },
+      }))
+      return Promise.resolve({
+        kind: 'success',
+        text: 'AOP delivery started — the agent will plan, implement, review, and browser-test; watch the trajectory for progress.',
+      })
     },
   })
 
-  // Yield the drain disposer first, then the registration disposer, so the
-  // effect's intra-effect teardown unregisters the command before draining
-  // in-flight handlers (mirroring command-compact).
   ctx.effect(function* () {
-    yield async () => { await Promise.allSettled([...activeRuns]) }
     yield registerAopCommand()
   }, 'aop command lifecycle')
 }
