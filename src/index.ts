@@ -647,4 +647,40 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   ctx.tools.register(toolDefinition)
+
+  const registerAopCommand = (commands: any) => {
+    commands.register({
+      name: 'aop',
+      description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
+      input: { hint: '<objective>' },
+      recordInput: true,
+      handler: async (invocation: any) => {
+        const objective = invocation.rawInput.trim()
+        if (objective.length === 0) {
+          return { kind: 'error', text: 'Usage: /aop <objective>' }
+        }
+        const result = await ctx.tools.execute({
+          signal: invocation.signal,
+          callId: 'cmd-aop-' + Date.now(),
+          name: 'aop_delivery',
+          arguments: { objective },
+          agent: invocation.agent,
+        })
+        if (result.isError) {
+          const message = result.error?.message ?? result.content?.[0]?.text ?? 'AOP delivery failed'
+          return { kind: 'error', text: message }
+        }
+        const text = result.content?.[0]?.text ?? 'AOP delivery completed.'
+        return { kind: 'success', text }
+      },
+    })
+  }
+
+  if (ctx.commands) {
+    registerAopCommand(ctx.commands)
+  } else if (typeof ctx.inject === 'function') {
+    ctx.inject(['commands'], (cmdCtx: any) => {
+      if (cmdCtx.commands) registerAopCommand(cmdCtx.commands)
+    })
+  }
 }
