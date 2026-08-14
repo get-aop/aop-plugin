@@ -375,7 +375,7 @@ function inspectQaEvidence(
   session: Session,
   navigationTool: string,
   evidenceTools: ReadonlySet<string>,
-  qaUrl: string,
+  qaUrl: string | undefined,
 ): QaEvidenceObservation {
   const navigationCalls = new Map<string, NavigationCall>()
   const evidenceCalls = new Map<string, EvidenceCall>()
@@ -387,7 +387,10 @@ function inspectQaEvidence(
     successfulNavigationAt: undefined as number | undefined,
   }
   const recordNavigationStart = (callId: string, argumentsValue: unknown): void => {
-    const target = matchesQaUrl(argumentsValue, qaUrl)
+    // Without an explicit qaUrl every navigation of the navigation tool is the
+    // target: QA discovered the deliverable itself and must still demonstrate
+    // real navigation followed by observed evidence.
+    const target = qaUrl === undefined ? true : matchesQaUrl(argumentsValue, qaUrl)
     navigationCalls.set(callId, { target })
     if (target) state.attemptedTargetNavigation = true
     state.successfulTargetNavigation = false
@@ -450,23 +453,24 @@ function validateQaEvidence(
   session: Session,
   navigationTool: string,
   evidenceTools: ReadonlySet<string>,
-  qaUrl: string,
+  qaUrl: string | undefined,
   status: 'pass' | 'changes-required' | 'blocked',
 ): void {
   const observation = inspectQaEvidence(session, navigationTool, evidenceTools, qaUrl)
+  const targetLabel = qaUrl ?? 'the deliverable'
   if (status === 'blocked') {
     if (observation.failedTargetNavigation) return
     if (observation.successfulTargetNavigation && observation.successfulEvidenceAfterNavigation) return
     if (!observation.attemptedTargetNavigation) {
-      throw new Error(`QA child "${session.id}" did not attempt navigation to qaUrl before reporting blocked`)
+      throw new Error(`QA child "${session.id}" did not attempt navigation to ${targetLabel} before reporting blocked`)
     }
     if (!observation.successfulTargetNavigation) {
-      throw new Error(`QA child "${session.id}" reported blocked without a failed or successful navigation to qaUrl`)
+      throw new Error(`QA child "${session.id}" reported blocked without a failed or successful navigation to ${targetLabel}`)
     }
     throw new Error(`QA child "${session.id}" reported blocked without browser evidence of the external prerequisite`)
   }
-  if (!observation.successfulTargetNavigation) throw new Error(`QA child "${session.id}" did not navigate successfully to qaUrl`)
-  if (!observation.successfulEvidenceAfterNavigation) throw new Error(`QA child "${session.id}" did not complete browser evidence after navigating to qaUrl`)
+  if (!observation.successfulTargetNavigation) throw new Error(`QA child "${session.id}" did not navigate successfully to ${targetLabel}`)
+  if (!observation.successfulEvidenceAfterNavigation) throw new Error(`QA child "${session.id}" did not complete browser evidence after navigating to ${targetLabel}`)
 }
 
 function sessionForChild(
@@ -515,8 +519,8 @@ export function apply(ctx: Context, config: Config): void {
     description: DESCRIPTION,
     parameters: {
       objective: { type: 'string', required: true, description: 'The complete implementation objective or ticket.' },
-      qaUrl: { type: 'string', required: true, description: 'Absolute HTTP(S) URL that browser QA must exercise.' },
-      qaInstructions: { type: 'string', required: true, description: 'Concrete browser behavior and outcomes QA must verify.' },
+      qaUrl: { type: 'string', description: 'Optional absolute HTTP(S) URL that browser QA must exercise; when omitted QA discovers the deliverable target from the plan and workspace.' },
+      qaInstructions: { type: 'string', description: 'Optional concrete browser behavior and outcomes QA must verify; when omitted QA derives them from the plan acceptance criteria.' },
       maxCycles: { type: 'number', description: 'Optional implementation-pass cap bounded by deployment policy.' },
     },
     output: {
@@ -527,8 +531,8 @@ export function apply(ctx: Context, config: Config): void {
       const parent = exec.agent
       if (parent === undefined) throw new Error('AOP delivery workflow requires a calling agent (exec.agent was undefined)')
       const objective = normalizedText(args.objective, 'objective')
-      const qaUrl = validateQaUrl(args.qaUrl)
-      const qaInstructions = normalizedText(args.qaInstructions, 'qaInstructions')
+      const qaUrl = args.qaUrl === undefined ? undefined : validateQaUrl(args.qaUrl)
+      const qaInstructions = args.qaInstructions === undefined ? undefined : normalizedText(args.qaInstructions, 'qaInstructions')
       const maxCycles = resolveMaxCycles(args.maxCycles, resolved.maxCycles)
       validateProvider(ctx, resolved.subagentProvider, resolved.roles)
       validateRoleTools(ctx, parent, resolved.roles)

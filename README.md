@@ -141,8 +141,8 @@ Invoked by an agent or user to execute the complete delivery lifecycle:
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `objective` | `string` | **Yes** | The complete implementation objective or ticket. |
-| `qaUrl` | `string` | **Yes** | Absolute HTTP(S) target URL that browser QA must exercise. |
-| `qaInstructions` | `string` | **Yes** | Concrete browser behaviors, interactions, and expected outcomes. |
+| `qaUrl` | `string` | No | Absolute HTTP(S) target URL for browser QA. When omitted, QA discovers the deliverable itself — it inspects the workspace (package.json scripts, README, plan acceptance criteria) to find how the app runs and which URL it serves. |
+| `qaInstructions` | `string` | No | Concrete browser behaviors, interactions, and expected outcomes. When omitted, QA derives them from the plan's acceptance criteria and reports them under `QA-INSTRUCTIONS`. |
 | `maxCycles` | `number` | No | Optional implementation-pass ceiling (bounded by deployment policy). |
 
 ---

@@ -331,17 +331,25 @@ while (true) {
   feedbackSource = 'post-review'
   cycles.qa += 1
   phase('QA')
-  const rawQa = await agent([
+  const qaPromptParts = [
     'Independently test the delivered behavior in a real browser. Do not modify source files.',
     'Objective:\n' + args.objective,
     'Accepted plan:\n' + JSON.stringify(plan),
     'Latest implementation artifact:\n' + JSON.stringify(implementation),
     'Passing review artifact:\n' + JSON.stringify(review),
-    'Target URL: ' + args.qaUrl,
-    'QA instructions:\n' + args.qaInstructions,
+    ...(args.qaUrl === undefined ? [] : ['Target URL: ' + args.qaUrl]),
+    ...(args.qaInstructions === undefined ? [] : ['QA instructions:\n' + args.qaInstructions]),
     'Prior QA findings requiring retest:\n' + JSON.stringify(qaRetestFindings),
-    'Exercise every accepted criterion through browser tools, plus the QA instructions as requirementId QA-INSTRUCTIONS. Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
-  ].join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
+  ]
+  if (args.qaUrl === undefined) {
+    qaPromptParts.push(
+      'Discover the deliverable target yourself: inspect the workspace (package.json scripts, README, server config, and the plan acceptance criteria verification methods) to find how the app runs and which URL it serves. Navigate a real browser to it and test every acceptance criterion; the plan defines the outcomes and QA-INSTRUCTIONS is your discovered browser test procedure.',
+    )
+  }
+  qaPromptParts.push(
+    'Exercise every accepted criterion through browser tools, plus QA-INSTRUCTIONS as the requirementId for the test procedure. Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
+  )
+  const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())
   qa = validateQa(rawQa, plan.acceptanceCriteria, qaRetestFindings)
   if (qa.status === 'blocked') return failure('blocked', 'qa', qa.blocker, cycles, terminalFindings())
