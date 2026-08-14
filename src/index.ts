@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { JsonValue, Session } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolCallView, ToolPresentationMode, ToolResultView } from '@deepseek-ai/dsh-tools'
@@ -548,9 +548,8 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'tool:aop-delivery',
     order: 117,
-    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA, or returns an error with the blocker or unresolved findings.',
+    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop command. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA, or returns an error with the blocker or unresolved findings.',
   })
-
   const toolDefinition = defineTool({
     name: 'aop_delivery',
     description: DESCRIPTION,
@@ -651,6 +650,7 @@ export function apply(ctx: Context, config: Config): void {
     name: 'aop',
     description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
     input: { hint: '<objective>' },
+    recordInput: false,
     handler: (invocation: any) => {
       const objective = invocation.rawInput.trim()
       if (objective.length === 0) {
@@ -658,18 +658,18 @@ export function apply(ctx: Context, config: Config): void {
       }
       // Route through the agent so the workflow runs inside the normal loop:
       // tool calls, workflow phases, and child sessions then stream in the
-      // trajectory instead of running silently behind the command plane.
+      // trajectory instead of running silently behind the command plane. The
+      // user/message is the authoritative payload (command/run omits args).
       invocation.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: 'Run the AOP delivery workflow (call the aop_delivery tool) for this objective:\n' + objective }],
-        source: { kind: 'plugin', plugin: 'aop', form: 'notice', summary: 'AOP delivery requested: ' + objective },
+        content: [{ type: 'text', text: 'The direct human issued the /aop command with this objective. Run the AOP delivery workflow (call the aop_delivery tool) and pass the objective below verbatim as the objective argument:\n' + objective }],
+        source: { kind: 'plugin', plugin: 'aop', form: 'notice', summary: boundContextSummary('AOP delivery requested: ' + objective) },
       }))
       return Promise.resolve({
         kind: 'success',
-        text: 'AOP delivery started — the agent will plan, implement, review, and browser-test; watch the trajectory for progress.',
+        text: 'AOP delivery requested — the agent will plan, implement, review, and browser-test; watch the trajectory for progress.',
       })
     },
   })
-
   ctx.effect(function* () {
     yield registerAopCommand()
   }, 'aop command lifecycle')

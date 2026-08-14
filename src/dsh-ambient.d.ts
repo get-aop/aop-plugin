@@ -50,8 +50,8 @@ declare module '@deepseek-ai/dsh-llm' {
     [key: string]: any
   }
   export function createUserMessage(input: any): any
+  export function boundContextSummary(input: string): string
 }
-
 declare module '@deepseek-ai/dsh-session' {
   export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
   export interface Session {

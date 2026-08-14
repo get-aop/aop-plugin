@@ -19,7 +19,7 @@ const zStub = new Proxy(function () {}, {
 })
 mock.module('@deepseek-ai/schemastery', () => ({ default: zStub }))
 mock.module('@deepseek-ai/dsh-tools', () => ({ defineTool: (options: any) => options }))
-mock.module('@deepseek-ai/dsh-llm', () => ({ createUserMessage: (input: any) => input }))
+mock.module('@deepseek-ai/dsh-llm', () => ({ createUserMessage: (input: any) => input, boundContextSummary: (input: string) => input }))
 
 describe('AopCardController', () => {
   it('initializes with default role models and valid snapshot', () => {
@@ -222,7 +222,7 @@ describe('/aop slash command', () => {
   it('registers the command, yields its disposer, and rejects empty objectives', async () => {
     const { registered, yields } = await mountHostAop()
     expect(registered).toHaveLength(1)
-    expect(registered[0]).toMatchObject({ name: 'aop' })
+    expect(registered[0]).toMatchObject({ name: 'aop', recordInput: false })
     expect(yields).toHaveLength(1)
     expect((yields[0] as any).name).toBe('regDisposer')
     const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
@@ -240,9 +240,10 @@ describe('/aop slash command', () => {
     })
     expect(followups).toHaveLength(1)
     expect(followups[0].content[0].text).toContain('aop_delivery')
+    expect(followups[0].content[0].text).toContain('verbatim')
     expect(followups[0].content[0].text).toContain('build a todo app')
     expect(followups[0].source).toMatchObject({ kind: 'plugin', plugin: 'aop' })
     expect(result.kind).toBe('success')
-    expect((result as any).text).toContain('AOP delivery started')
+    expect((result as any).text).toContain('AOP delivery requested')
   })
 })
