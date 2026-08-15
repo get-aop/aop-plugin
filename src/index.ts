@@ -134,6 +134,9 @@ function positiveInteger(value: number, propertyName: string): number {
 function resolveRole(role: RoleName, config: RoleConfig): ResolvedRoleConfig {
   const provider = config.provider === undefined ? undefined : normalizedText(config.provider, `${role}.provider`)
   const model = config.model === undefined ? undefined : normalizedText(config.model, `${role}.model`)
+  if (model !== undefined && provider === undefined) {
+    throw new TypeError(`${role}.model requires ${role}.provider so the preflight route check can run`)
+  }
   const toolPresentation = config.toolPresentation
   if (toolPresentation !== undefined && !['native', 'code', 'both'].includes(toolPresentation)) {
     throw new TypeError(`${role}.toolPresentation must be native, code, or both`)
@@ -217,12 +220,23 @@ function resolveConfig(config: Config): ResolvedConfig {
  * exact-model lookup — rather than the advisory catalog, so pass-through
  * adapters that serve unlisted model ids are not falsely rejected.
  */
-async function preflightRoleModels(ctx: Context, roles: ResolvedConfig['roles']): Promise<void> {
+async function preflightRoleModels(ctx: Context, roles: ResolvedConfig['roles'], signal?: AbortSignal): Promise<void> {
   for (const role of ROLE_NAMES) {
     const route = roles[role]
-    if (route.provider === undefined || route.model === undefined) continue
+    if (route.provider === undefined) continue
+    if (route.model === undefined) {
+      // Provider-only route: the deployment default model applies. Check only
+      // that the provider route is registered at all.
+      try {
+        await ctx.llm.listModels(route.provider)
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Role "${role}" names provider "${route.provider}" that is not registered: ${message}`)
+      }
+      continue
+    }
     try {
-      await ctx.llm.resolveModelInfo(route.provider, route.model)
+      await ctx.llm.resolveModelInfo(route.provider, route.model, signal)
     } catch (error: unknown) {
       const code = isRecord(error) && typeof error['code'] === 'string' ? `${error['code']}: ` : ''
       const message = error instanceof Error ? error.message : String(error)
@@ -570,12 +584,15 @@ function sessionForChild(
 /**
  * Surface the real reason a role child failed (e.g. an unknown model on its
  * provider route) instead of the opaque "child failed" the workflow script
- * would otherwise report.
+ * would otherwise report. Only the FINAL `turn/end` counts: an earlier
+ * recovered turn error must not be misattributed to a later aborted or
+ * max-tokens end.
  */
 function childFailureDetail(session: Session, info: WorkflowChildValidationInfo, result: unknown): string {
   let detail = ''
   for (const event of session.events) {
     if (event.type !== 'turn/end') continue
+    detail = ''
     const reason = event.data.reason
     if (reason !== null && typeof reason === 'object' && reason.kind === 'error'
       && reason.error !== null && typeof reason.error === 'object'
@@ -628,7 +645,7 @@ export function apply(ctx: Context, config: Config): void {
       const maxCycles = resolveMaxCycles(args.maxCycles, resolved.maxCycles)
       validateProvider(ctx, resolved.subagentProvider, resolved.roles)
       validateRoleTools(ctx, parent, resolved.roles)
-      await preflightRoleModels(ctx, resolved.roles)
+      await preflightRoleModels(ctx, resolved.roles, exec.signal)
       const qaNavigationTool = resolved.roles.qa.tools
         .find(tool => tool.browserNavigation === true)?.name
       if (qaNavigationTool === undefined) throw new Error('AOP delivery workflow has no QA navigation tool')
@@ -640,7 +657,9 @@ export function apply(ctx: Context, config: Config): void {
       const validateChildResult = (info: WorkflowChildValidationInfo, result: unknown): void => {
         const session = sessionForChild(ctx, parent, info)
         if (!isRecord(result) || result['stopReason'] !== 'completed') {
-          throw new Error(childFailureDetail(session, info, result))
+          const error = new Error(childFailureDetail(session, info, result))
+          error.stack = error.message
+          throw error
         }
         if (info.phase !== 'QA') return
         const verdict = qaVerdictFromChildResult(result)

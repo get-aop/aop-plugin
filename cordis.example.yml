@@ -13,8 +13,8 @@
     phaseTimeoutMs: 1800000
     roles:
       plan:
-        provider: deepseek
-        model: sol-xhigh
+        provider: opencode-go
+        model: deepseek-v4-pro
         tools:
           - name: read
             access: read
@@ -24,8 +24,8 @@
             access: read
 
       implementation:
-        provider: deepseek
-        model: deepseek-v4-flash-max
+        provider: opencode-go
+        model: deepseek-v4-flash
         toolPresentation: native
         tools:
           - name: read
@@ -42,8 +42,8 @@
             access: read
 
       review:
-        provider: deepseek
-        model: fable-5-max
+        provider: kimi-coding
+        model: kimi-k3
         tools:
           - name: read
             access: read
@@ -53,8 +53,8 @@
             access: read
 
       qa:
-        provider: deepseek
-        model: sol-medium
+        provider: opencode-go
+        model: deepseek-v4-flash
         tools:
           - name: read
             access: read

@@ -73,8 +73,8 @@ Mount the plugin in your `cordis.yml` profile or overlay:
     phaseTimeoutMs: 1800000
     roles:
       plan:
-        provider: deepseek
-        model: sol-xhigh
+        provider: opencode-go
+        model: deepseek-v4-pro
         tools:
           - name: read
             access: read
@@ -84,8 +84,8 @@ Mount the plugin in your `cordis.yml` profile or overlay:
             access: read
 
       implementation:
-        provider: deepseek
-        model: deepseek-v4-flash-max
+        provider: opencode-go
+        model: deepseek-v4-flash
         toolPresentation: native
         tools:
           - name: read
@@ -102,8 +102,8 @@ Mount the plugin in your `cordis.yml` profile or overlay:
             access: read
 
       review:
-        provider: deepseek
-        model: fable-5-max
+        provider: kimi-coding
+        model: kimi-k3
         tools:
           - name: read
             access: read
@@ -113,8 +113,8 @@ Mount the plugin in your `cordis.yml` profile or overlay:
             access: read
 
       qa:
-        provider: deepseek
-        model: sol-medium
+        provider: opencode-go
+        model: deepseek-v4-flash
         tools:
           - name: read
             access: read
@@ -147,10 +147,9 @@ Invoked by an agent or user to execute the complete delivery lifecycle:
 | `qaInstructions` | `string` | No | Concrete browser behaviors, interactions, and expected outcomes. When omitted, QA derives them from the plan's acceptance criteria and reports them under `QA-INSTRUCTIONS`. |
 | `maxCycles` | `number` | No | Optional implementation-pass ceiling (bounded by deployment policy). |
 
-> **Preflight model check**: before the workflow starts, every role's `provider`/`model` route is verified against the deployment's model catalog. A missing provider or model fails the tool call immediately with the available models listed, instead of surfacing later as an opaque "child failed".
+> **Preflight model check**: before the workflow starts, every role route that names both `provider` and `model` is verified through the route-owning adapter's authoritative exact-model resolution — catalog-unlisted pass-through model ids are accepted, and a route the deployment cannot serve fails the tool call immediately with the adapter's error (catalog models are shown as suggestions when available), instead of surfacing later as an opaque "child failed". `model` without `provider` is rejected at load time so no route escapes the check; `provider` without `model` is checked for registration only.
 
-
-Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancels the current phase (Plan/Implementation/Review/QA) via the `workflow/phase` event stream.
+Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancels the whole run when any single phase exceeds it (Plan/Implementation/Review/QA, armed via the `workflow/phase` event stream).
 
 > **Discovery-mode trust boundary**: when `qaUrl` is omitted, the target is *declared by the QA model* in the artifact's `discoveredUrl`. The workflow enforces that navigation and evidence are pinned to exactly that declared URL (no navigation elsewhere can certify evidence), but it cannot verify that the declared URL is genuinely the deliverable — target *authenticity* is trusted to the QA model. For strict environments, always pass an explicit `qaUrl`.
 

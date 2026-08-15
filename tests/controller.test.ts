@@ -180,10 +180,33 @@ describe('AopCardController', () => {
 })
 
 describe('/aop slash command', () => {
-  async function mountHostAop(modelCatalog: Record<string, string[]> = {
-    'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
-    'kimi-coding': ['kimi-k3'],
-  }) {
+  const roleDefaults = () => ({
+    plan: { model: 'deepseek-v4-pro', provider: 'opencode-go', tools: [{ name: 'read', access: 'read' }] },
+    implementation: { model: 'deepseek-v4-flash', provider: 'opencode-go', tools: [{ name: 'write', access: 'write' }] },
+    review: { model: 'kimi-k3', provider: 'kimi-coding', tools: [{ name: 'read', access: 'read' }] },
+    qa: {
+      model: 'deepseek-v4-flash',
+      provider: 'opencode-go',
+      tools: [
+        { name: 'browser_navigate', access: 'read', browserNavigation: true },
+        { name: 'browser_snapshot', access: 'read', browserEvidence: true },
+      ],
+    },
+  })
+
+  async function mountHostAop(options: {
+    catalog?: Record<string, string[]>
+    llm?: any
+    roles?: any
+    config?: Record<string, unknown>
+    childSession?: any
+    onEvent?: (name: string, callback: any) => any
+    run?: (request: any) => any
+  } = {}) {
+    const catalog = options.catalog ?? {
+      'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      'kimi-coding': ['kimi-k3'],
+    }
     const registered: any[] = []
     const yields: unknown[] = []
     const regDisposer = () => {}
@@ -197,16 +220,19 @@ describe('/aop slash command', () => {
       commands: {
         register: (def: any) => { registered.push(def); return regDisposer },
       },
-      llm: {
-        listModels: async (provider: string) => (modelCatalog[provider] ?? []).map((id: string) => ({ id })),
+      llm: options.llm ?? {
+        listModels: async (provider: string) => (catalog[provider] ?? []).map((id: string) => ({ id })),
         resolveModelInfo: async (provider: string, model: string) => {
-          const list = modelCatalog[provider]
+          const list = catalog[provider]
           if (list === undefined) throw Object.assign(new Error('no adapter'), { code: 'NO_ADAPTER' })
           if (!list.includes(model)) throw Object.assign(new Error(`unknown model "${model}"`), { code: 'UNKNOWN_MODEL' })
           return { provider, id: model }
         },
       },
-      on: () => () => {},
+      on: options.onEvent ?? (() => () => {}),
+      sessions: {
+        get: (id: string) => (options.childSession !== undefined && id === options.childSession.id ? options.childSession : undefined),
+      },
       subagents: {
         getProvider: () => ({
           sessionBacked: true,
@@ -217,6 +243,7 @@ describe('/aop slash command', () => {
       workflowEngine: {
         start: (request: any) => {
           startedRuns.push(request)
+          if (options.run !== undefined) return options.run(request)
           return {
             id: 'run-1',
             result: Promise.resolve({
@@ -246,21 +273,7 @@ describe('/aop slash command', () => {
       },
     }
     const { apply: applyHost } = await import('../src/index')
-    applyHost(ctx, {
-      roles: {
-        plan: { model: 'deepseek-v4-pro', provider: 'opencode-go', tools: [{ name: 'read', access: 'read' }] },
-        implementation: { model: 'deepseek-v4-flash', provider: 'opencode-go', tools: [{ name: 'write', access: 'write' }] },
-        review: { model: 'kimi-k3', provider: 'kimi-coding', tools: [{ name: 'read', access: 'read' }] },
-        qa: {
-          model: 'deepseek-v4-flash',
-          provider: 'opencode-go',
-          tools: [
-            { name: 'browser_navigate', access: 'read', browserNavigation: true },
-            { name: 'browser_snapshot', access: 'read', browserEvidence: true },
-          ],
-        },
-      },
-    })
+    applyHost(ctx, { ...options.config, roles: options.roles ?? roleDefaults() })
     return { registered, yields, startedRuns }
   }
   it('registers the command, yields its disposer, and rejects empty objectives', async () => {
@@ -295,8 +308,10 @@ describe('/aop slash command', () => {
 
   it('fails preflight with a clear error when a role model is not configured', async () => {
     const { registered, startedRuns } = await mountHostAop({
-      'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
-      'kimi-coding': [],
+      catalog: {
+        'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
+        'kimi-coding': [],
+      },
     })
     const tool = registered.find((def: any) => def.name === 'aop_delivery')
     await expect(tool.execute(
@@ -316,5 +331,157 @@ describe('/aop slash command', () => {
     expect(startedRuns).toHaveLength(1)
     expect(startedRuns[0].meta.name).toBe('aop-delivery-workflow')
     expect(result.runId).toBe('run-1')
+  })
+
+  it('rejects a role model without provider at load time', async () => {
+    const roles = roleDefaults()
+    roles.implementation = { model: 'deepseek-v4-flash', tools: [{ name: 'write', access: 'write' }] }
+    await expect(mountHostAop({ roles })).rejects.toThrow('implementation.model requires implementation.provider')
+  })
+
+  it('accepts pass-through models unlisted in the advisory catalog', async () => {
+    const { registered, startedRuns } = await mountHostAop({
+      llm: {
+        listModels: async () => [],
+        resolveModelInfo: async (provider: string, model: string) => ({ provider, id: model }),
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const result = await tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    expect(startedRuns).toHaveLength(1)
+    expect(result.runId).toBe('run-1')
+  })
+
+  it('lists available models when a route fails exact-model resolution', async () => {
+    const { registered, startedRuns } = await mountHostAop({
+      catalog: {
+        'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
+        'kimi-coding': ['other-kimi-model'],
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('(available: other-kimi-model)')
+    expect(startedRuns).toHaveLength(0)
+  })
+
+  // Real timers on purpose: the wall-clock timeout firing is the behavior
+  // under test, and the test awaits the promise it rejects — no sleeps.
+  it('cancels the run when it exceeds runTimeoutMs', async () => {
+    const cancels: string[] = []
+    const { registered } = await mountHostAop({
+      config: { runTimeoutMs: 5, phaseTimeoutMs: 60_000 },
+      run: () => {
+        const { promise, resolve } = Promise.withResolvers<any>()
+        return {
+          id: 'run-1',
+          result: promise,
+          cancel: (reason: string) => {
+            cancels.push(reason)
+            resolve({ stopReason: 'cancelled', error: reason, agentsStarted: 0, value: undefined })
+          },
+          dispose: () => Promise.resolve(),
+        }
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('workflow exceeded runTimeoutMs')
+    expect(cancels).toEqual(['workflow exceeded runTimeoutMs'])
+  })
+
+  it('cancels the run when a phase exceeds phaseTimeoutMs and ignores other runs', async () => {
+    const cancels: string[] = []
+    let phaseListener: ((info: any, title: string) => void) | undefined
+    const { registered } = await mountHostAop({
+      config: { runTimeoutMs: 60_000, phaseTimeoutMs: 5 },
+      onEvent: (_name: string, callback: any) => {
+        phaseListener = callback
+        return () => { phaseListener = undefined }
+      },
+      run: () => {
+        const { promise, resolve } = Promise.withResolvers<any>()
+        return {
+          id: 'run-1',
+          result: promise,
+          cancel: (reason: string) => {
+            cancels.push(reason)
+            resolve({ stopReason: 'cancelled', error: reason, agentsStarted: 0, value: undefined })
+          },
+          dispose: () => Promise.resolve(),
+        }
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const pending = tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    while (phaseListener === undefined) await Promise.resolve()
+    phaseListener({ id: 'other-run', meta: {} }, 'Stray phase')
+    phaseListener({ id: 'run-1', meta: {} }, 'Review')
+    await expect(pending).rejects.toThrow('phase "Review" exceeded phaseTimeoutMs')
+    expect(cancels).toEqual(['phase "Review" exceeded phaseTimeoutMs'])
+  })
+
+  it('throws the real child error from validateChildResult', async () => {
+    const session = {
+      id: 'child-1',
+      firstLiveSeq: 7,
+      header: { origin: 'subagent', parentSession: 'parent-1', seedLength: undefined },
+      events: [{ type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'review crashed hard' } } } }],
+    }
+    const { registered, startedRuns } = await mountHostAop({ childSession: session })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: { session: { header: { id: 'parent-1' } } }, signal: new AbortController().signal },
+    )
+    const validator = startedRuns[0].validateChildResult
+    const info = {
+      seq: 1,
+      label: 'Review',
+      phase: 'Review',
+      childId: 'child-1',
+      localAgent: { id: 'child-1', session },
+      sessionStartSeq: 7,
+    }
+    expect(() => validator(info, { stopReason: 'error' })).toThrow('Phase "Review" child failed (error): review crashed hard')
+  })
+
+  it('ignores stale child errors when the final turn ended differently', async () => {
+    const session = {
+      id: 'child-1',
+      firstLiveSeq: 7,
+      header: { origin: 'subagent', parentSession: 'parent-1', seedLength: undefined },
+      events: [
+        { type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'old crash' } } } },
+        { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'legacy' } } } },
+      ],
+    }
+    const { registered, startedRuns } = await mountHostAop({ childSession: session })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: { session: { header: { id: 'parent-1' } } }, signal: new AbortController().signal },
+    )
+    const validator = startedRuns[0].validateChildResult
+    const info = {
+      seq: 1,
+      label: 'Review',
+      phase: 'Review',
+      childId: 'child-1',
+      localAgent: { id: 'child-1', session },
+      sessionStartSeq: 7,
+    }
+    expect(() => validator(info, { stopReason: 'aborted' })).toThrow('Phase "Review" child failed (aborted)')
+    expect(() => validator(info, { stopReason: 'aborted' })).not.toThrow(/old crash/)
   })
 })
