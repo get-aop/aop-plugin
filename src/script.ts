@@ -119,15 +119,6 @@ function validDiscoveredUrl(value) {
   const rest = value.slice(schemeEnd + 3)
   return rest.length > 0 && rest.indexOf(' ') === -1 && rest.indexOf('\t') === -1
 }
-function validPrUrl(value) {
-  // Same structural http(s) check as discoveredUrl — the workflow script runs
-  // in a bare vm realm without the Node URL global.
-  const schemeEnd = value.indexOf('://')
-  if (schemeEnd < 0) return false
-  const scheme = value.slice(0, schemeEnd)
-  if (scheme !== 'http' && scheme !== 'https') return false
-  const rest = value.slice(schemeEnd + 3)
-  return rest.length > 0 && rest.indexOf(' ') === -1 && rest.indexOf('\t') === -1
 function sized(value, stage) {
   const length = JSON.stringify(value).length
   if (length > args.maxArtifactChars) throw new Error(stage + ' artifact exceeds maxArtifactChars (' + length + ' > ' + args.maxArtifactChars + ')')
@@ -254,7 +245,7 @@ function validateShip(value) {
     || typeof value.merged !== 'boolean' || !normalizedOptional(value.ci)
     || !normalizedOptional(value.blocker)) throw new Error('ship artifact is malformed')
   if (value.status === 'shipped') {
-    if (!normalized(value.prUrl) || !validPrUrl(value.prUrl) || value.merged !== true || !normalized(value.ci) || value.blocker !== '') {
+    if (!normalized(value.prUrl) || !validDiscoveredUrl(value.prUrl) || value.merged !== true || !normalized(value.ci) || value.blocker !== '') {
       throw new Error('shipped artifact needs an absolute http(s) PR URL, merged true, a CI outcome, and no blocker')
     }
   } else if (value.status === 'blocked') {

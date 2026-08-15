@@ -179,6 +179,15 @@ describe('AopCardController', () => {
   })
 })
 
+describe('AOP delivery workflow script', () => {
+  it('parses as an async worker script body', async () => {
+    const { AOP_DELIVERY_WORKFLOW_SCRIPT } = await import('../src/index')
+    // The worker evaluates this string in a bare vm realm; a syntax error here
+    // would break every run at script evaluation time.
+    expect(() => new Function('async function script(args, agent, phase) {\n' + AOP_DELIVERY_WORKFLOW_SCRIPT + '\n}')).not.toThrow()
+  })
+})
+
 describe('/aop slash command', () => {
   const roleDefaults = () => ({
     plan: { model: 'deepseek-v4-pro', provider: 'opencode-go', tools: [{ name: 'read', access: 'read' }] },
