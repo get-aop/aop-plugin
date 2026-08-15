@@ -149,7 +149,7 @@ Invoked by an agent or user to execute the complete delivery lifecycle:
 
 > **Preflight model check**: before the workflow starts, every role route that names both `provider` and `model` is verified through the route-owning adapter's authoritative exact-model resolution — catalog-unlisted pass-through model ids are accepted, and a route the deployment cannot serve fails the tool call immediately with the adapter's error (catalog models are shown as suggestions when available), instead of surfacing later as an opaque "child failed". `model` without `provider` is rejected at load time so no route escapes the check; `provider` without `model` is checked for registration only.
 
-Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancels the whole run when any single phase exceeds it (Plan/Implementation/Review/QA, armed via the `workflow/phase` event stream).
+Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancels the whole run when any single **evaluator** phase exceeds it (Plan/Review/QA, armed via the `workflow/phase` event stream). The Implementation phase is exempt from the phase cap — it is the only role that legitimately drives external pipelines (CI, releases) — and is bounded by `runTimeoutMs` alone.
 
 > **Discovery-mode trust boundary**: when `qaUrl` is omitted, the target is *declared by the QA model* in the artifact's `discoveredUrl`. The workflow enforces that navigation and evidence are pinned to exactly that declared URL (no navigation elsewhere can certify evidence), but it cannot verify that the declared URL is genuinely the deliverable — target *authenticity* is trusted to the QA model. For strict environments, always pass an explicit `qaUrl`.
 

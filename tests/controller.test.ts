@@ -431,6 +431,45 @@ describe('/aop slash command', () => {
     expect(cancels).toEqual(['phase "Review" exceeded phaseTimeoutMs'])
   })
 
+  // Real timers: the wall-clock timeout firing (or NOT firing during
+  // implementation) is the behavior under test.
+  it('does not arm the phase timer during the implementation phase', async () => {
+    const cancels: string[] = []
+    let phaseListener: ((info: any, title: string) => void) | undefined
+    const { registered } = await mountHostAop({
+      config: { runTimeoutMs: 60_000, phaseTimeoutMs: 10 },
+      onEvent: (_name: string, callback: any) => {
+        phaseListener = callback
+        return () => { phaseListener = undefined }
+      },
+      run: () => {
+        const { promise, resolve } = Promise.withResolvers<any>()
+        return {
+          id: 'run-1',
+          result: promise,
+          cancel: (reason: string) => {
+            cancels.push(reason)
+            resolve({ stopReason: 'cancelled', error: reason, agentsStarted: 0, value: undefined })
+          },
+          dispose: () => Promise.resolve(),
+        }
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const pending = tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    while (phaseListener === undefined) await Promise.resolve()
+    phaseListener({ id: 'run-1', meta: {} }, 'Plan')
+    phaseListener({ id: 'run-1', meta: {} }, 'Implementation')
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(cancels).toEqual([])
+    phaseListener({ id: 'run-1', meta: {} }, 'Review')
+    await expect(pending).rejects.toThrow('phase "Review" exceeded phaseTimeoutMs')
+    expect(cancels).toEqual(['phase "Review" exceeded phaseTimeoutMs'])
+  })
+
   it('throws the real child error from validateChildResult', async () => {
     const session = {
       id: 'child-1',

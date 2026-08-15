@@ -311,7 +311,7 @@ while (true) {
     'Feedback source: ' + feedbackSource,
     'Pending findings:\n' + JSON.stringify(pendingFindings),
     'Previous implementation artifact:\n' + JSON.stringify(implementation ?? null),
-    'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id. Do not wait indefinitely for external processes such as CI or release pipelines: bound any status polling to a few checks, then return — review and browser QA run automatically after your artifact.',
+    'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.',
   ].join('\n\n'), roleOptions('implementation', implementationSchema, 'Implementation pass ' + cycles.implementation, 'Implementation'))
   if (rawImplementation === null) return failure('stage-failed', 'implementation', 'Implementation child failed', cycles, terminalFindings())
   const pendingIds = pendingFindings.map(finding => finding.id)

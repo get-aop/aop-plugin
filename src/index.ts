@@ -702,7 +702,16 @@ export function apply(ctx: Context, config: Config): void {
         phaseTimer = setTimeout(() => { run.cancel(`phase "${phaseTitle}" exceeded phaseTimeoutMs`) }, resolved.phaseTimeoutMs)
       }
       const offPhase = ctx.on('workflow/phase', (info: any, title: string) => {
-        if (info.id === run.id) armPhaseTimer(title)
+        if (info.id !== run.id) return
+        if (title === 'Implementation') {
+          // Implementation is the only role that legitimately drives external
+          // pipelines (CI, releases); the run cap bounds it, not the
+          // evaluator-phase budget. Clear any armed evaluator timer.
+          clearTimeout(phaseTimer)
+          phaseTimer = undefined
+          return
+        }
+        armPhaseTimer(title)
       })
       const runTimer = setTimeout(() => { run.cancel('workflow exceeded runTimeoutMs') }, resolved.runTimeoutMs)
       let runError: unknown
