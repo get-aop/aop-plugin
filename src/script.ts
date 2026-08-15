@@ -83,7 +83,19 @@ const qaSchema = {
   required: ['status', 'summary', 'checks', 'retestedFindingIds', 'findings', 'blocker', 'discoveredUrl'],
   additionalProperties: false,
 }
-
+const shipSchema = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['shipped', 'blocked'] },
+    summary: { type: 'string' },
+    prUrl: { type: 'string' },
+    merged: { type: 'boolean' },
+    ci: { type: 'string' },
+    blocker: { type: 'string' },
+  },
+  required: ['status', 'summary', 'prUrl', 'merged', 'ci', 'blocker'],
+  additionalProperties: false,
+}
 function normalized(value) {
   return typeof value === 'string' && value.length > 0 && value === value.trim()
 }
@@ -227,6 +239,22 @@ function validateQa(value, acceptanceCriteria, priorFindings) {
   } else throw new Error('QA status is invalid')
   return sized(value, 'QA')
 }
+function validateShip(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)
+    || !normalized(value.summary) || !normalizedOptional(value.prUrl)
+    || typeof value.merged !== 'boolean' || !normalizedOptional(value.ci)
+    || !normalizedOptional(value.blocker)) throw new Error('ship artifact is malformed')
+  if (value.status === 'shipped') {
+    if (!normalized(value.prUrl) || value.merged !== true || !normalized(value.ci) || value.blocker !== '') {
+      throw new Error('shipped artifact needs a PR URL, merged true, a CI outcome, and no blocker')
+    }
+  } else if (value.status === 'blocked') {
+    if (!normalized(value.blocker) || value.prUrl !== '' || value.merged !== false || value.ci !== '') {
+      throw new Error('blocked ship needs only a concrete blocker')
+    }
+  } else throw new Error('ship status is invalid')
+  return sized(value, 'ship')
+}
 function roleOptions(role, schema, label, phaseName) {
   const route = args.roles[role]
   return {
@@ -312,6 +340,7 @@ while (true) {
     'Pending findings:\n' + JSON.stringify(pendingFindings),
     'Previous implementation artifact:\n' + JSON.stringify(implementation ?? null),
     'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.',
+    ...(args.ship === true ? ['The ship pass after QA owns the PR, CI verification, and merge: do not push, open pull requests, or merge anything yourself. Leave your delivered changes committed (or uncommitted) in the workspace.'] : []),
   ].join('\n\n'), roleOptions('implementation', implementationSchema, 'Implementation pass ' + cycles.implementation, 'Implementation'))
   if (rawImplementation === null) return failure('stage-failed', 'implementation', 'Implementation child failed', cycles, terminalFindings())
   const pendingIds = pendingFindings.map(finding => finding.id)
@@ -385,6 +414,20 @@ while (true) {
     continue
   }
   if (qa.status !== 'pass') throw new Error('QA status is invalid')
+  if (args.ship === true) {
+    phase('Ship')
+    const rawShip = await agent([
+      'Ship the delivered change. You are the only role allowed to modify source files.',
+      'Objective:\n' + args.objective,
+      'Accepted plan:\n' + JSON.stringify(plan),
+      'Final implementation artifact:\n' + JSON.stringify(implementation),
+      'Inspect the workspace git state (branch, remotes, working tree). Commit the delivered changes, push a branch, and open a pull request against the default branch. Then verify CI: poll the PR checks with at most three status checks per pipeline run and never with sleep loops. If CI fails, fix the failure in the branch, push, and re-check (again bounded). If the default branch moved, resolve the conflicts (merge or rebase) and push. When the checks are green, merge the PR and return shipped with the PR URL, merged true, and the CI outcome. Return blocked (with a concrete blocker) only for an external prerequisite you cannot resolve: no git remote, no push permission, no CI configured, or an unresolvable conflict. Never claim a merge that did not happen.',
+    ].join('\n\n'), roleOptions('implementation', shipSchema, 'Ship pass', 'Ship'))
+    if (rawShip === null) return failure('stage-failed', 'ship', 'Ship child failed', cycles, terminalFindings())
+    const ship = validateShip(rawShip)
+    if (ship.status === 'blocked') return failure('blocked', 'ship', ship.blocker, cycles, terminalFindings())
+    return { status: 'completed', cycles, plan, implementation, review, qa, ship }
+  }
   return {
     status: 'completed',
     cycles,

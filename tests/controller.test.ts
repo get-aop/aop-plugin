@@ -276,34 +276,37 @@ describe('/aop slash command', () => {
     applyHost(ctx, { ...options.config, roles: options.roles ?? roleDefaults() })
     return { registered, yields, startedRuns }
   }
-  it('registers the command, yields its disposer, and rejects empty objectives', async () => {
+  it('registers both commands, yields their disposers, and rejects empty objectives', async () => {
     const { registered, yields } = await mountHostAop()
-    const command = registered.find((def: any) => def.name === 'aop')
-    expect(command).toBeDefined()
-    expect(command).toMatchObject({ recordInput: false })
-    expect(yields).toHaveLength(1)
+    const commands = registered.filter((def: any) => def.name === 'aop' || def.name === 'aopy')
+    expect(commands).toHaveLength(2)
+    expect(commands[0]).toMatchObject({ name: 'aop', recordInput: false })
+    expect(commands[1]).toMatchObject({ name: 'aopy', recordInput: false })
+    expect(yields).toHaveLength(2)
     expect((yields[0] as any).name).toBe('regDisposer')
-    const result = await command.handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
+    const result = await commands[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
     expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
+    const yoloResult = await commands[1].handler({ rawInput: '   ', commandId: 'cmd-2', agent: {}, signal: new AbortController().signal })
+    expect(yoloResult).toEqual({ kind: 'error', text: 'Usage: /aopy <objective>' })
   })
 
-  it('routes the objective to the agent as a followup and acks immediately', async () => {
+  it('routes the /aopy objective with yolo mode to the agent as a followup', async () => {
     const followups: any[] = []
     const { registered } = await mountHostAop()
-    const command = registered.find((def: any) => def.name === 'aop')
+    const command = registered.find((def: any) => def.name === 'aopy')
     const result = await command.handler({
-      rawInput: '  build a todo app ',
-      commandId: 'cmd-42',
+      rawInput: '  ship the todo app ',
+      commandId: 'cmd-43',
       agent: { followup: (message: any) => { followups.push(message) } },
       signal: new AbortController().signal,
     })
     expect(followups).toHaveLength(1)
     expect(followups[0].content[0].text).toContain('aop_delivery')
-    expect(followups[0].content[0].text).toContain('verbatim')
-    expect(followups[0].content[0].text).toContain('build a todo app')
+    expect(followups[0].content[0].text).toContain("pass 'yolo' as the mode argument")
+    expect(followups[0].content[0].text).toContain('ship the todo app')
     expect(followups[0].source).toMatchObject({ kind: 'plugin', plugin: 'aop' })
     expect(result.kind).toBe('success')
-    expect((result as any).text).toContain('AOP delivery requested')
+    expect((result as any).text).toContain('AOP YOLO delivery requested')
   })
 
   it('fails preflight with a clear error when a role model is not configured', async () => {
@@ -331,6 +334,83 @@ describe('/aop slash command', () => {
     expect(startedRuns).toHaveLength(1)
     expect(startedRuns[0].meta.name).toBe('aop-delivery-workflow')
     expect(result.runId).toBe('run-1')
+  })
+
+  it('passes ship mode, ship arg, and an extra child ceiling in yolo mode', async () => {
+    const { registered, startedRuns } = await mountHostAop({
+      run: () => ({
+        id: 'run-1',
+        result: Promise.resolve({
+          stopReason: 'completed',
+          agentsStarted: 5,
+          value: {
+            status: 'completed',
+            cycles: { implementation: 1, review: 1, qa: 1 },
+            plan: {},
+            implementation: {},
+            review: { status: 'pass' },
+            qa: { status: 'pass' },
+            ship: { status: 'shipped', summary: 'Merged.', prUrl: 'https://github.com/o/r/pull/7', merged: true, ci: '8/8 green', blocker: '' },
+          },
+        }),
+        cancel: () => {},
+        dispose: () => Promise.resolve(),
+      }),
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const result = await tool.execute(
+      { objective: 'Deliver something.', mode: 'yolo' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    expect(startedRuns).toHaveLength(1)
+    expect(startedRuns[0].args.ship).toBe(true)
+    expect(startedRuns[0].maxTotalAgents).toBe(1 + 3 * 8 + 1)
+    expect((result.result as any).ship.status).toBe('shipped')
+  })
+
+  it('rejects a yolo completion without a shipped artifact', async () => {
+    const { registered } = await mountHostAop()
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.', mode: 'yolo' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('invalid completed result')
+  })
+
+  it('accepts a ship-stage failure terminal', async () => {
+    const { registered } = await mountHostAop({
+      run: () => ({
+        id: 'run-1',
+        result: Promise.resolve({
+          stopReason: 'completed',
+          agentsStarted: 5,
+          value: {
+            status: 'blocked',
+            stage: 'ship',
+            message: 'no git remote configured',
+            cycles: { implementation: 1, review: 1, qa: 1 },
+            pendingFindings: [],
+          },
+        }),
+        cancel: () => {},
+        dispose: () => Promise.resolve(),
+      }),
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.', mode: 'yolo' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('blocked at ship: no git remote configured')
+  })
+
+  it('rejects an unknown mode', async () => {
+    const { registered, startedRuns } = await mountHostAop()
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.', mode: 'bogus' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('mode must be standard or yolo')
+    expect(startedRuns).toHaveLength(0)
   })
 
   it('rejects a role model without provider at load time', async () => {

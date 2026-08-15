@@ -55,12 +55,10 @@ export interface Config {
 export interface DeliveryCallArgs {
   /** The complete implementation objective or ticket. */
   objective: string
-  /** Optional absolute HTTP(S) URL for browser QA; when omitted QA discovers the target from the plan and workspace. */
-  qaUrl?: string
-  /** Optional concrete browser behavior and outcomes QA must verify; when omitted QA derives them from the plan's acceptance criteria. */
-  qaInstructions?: string
   /** Optional implementation-pass cap bounded by deployment policy. */
   maxCycles?: number
+  /** `yolo` runs the ship pass after QA: PR, CI verification, conflict/issue fixes, automatic merge. */
+  mode?: 'standard' | 'yolo'
 }
 
 /** Cycle counts executed during the delivery workflow. */
@@ -80,10 +78,13 @@ export interface DeliveryFinding {
   remediation: string
 }
 
+/** A phase that can terminate the workflow, including the yolo ship pass. */
+export type DeliveryStage = RoleName | 'ship'
+
 /** Terminal failure outcome. */
 export interface DeliveryTerminalFailure {
   status: 'blocked' | 'cycle-limit' | 'stage-failed'
-  stage: RoleName
+  stage: DeliveryStage
   message: string
   cycles: DeliveryCycles
   pendingFindings: DeliveryFinding[]
@@ -97,6 +98,8 @@ export interface DeliveryCompletedResult {
   implementation: unknown
   review: unknown
   qa: unknown
+  /** Present only in yolo mode: the ship pass merged the delivered change. */
+  ship?: unknown
 }
 
 /** The terminal result union. */

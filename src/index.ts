@@ -21,6 +21,7 @@ import type {
   DeliveryCallArgs,
   DeliveryCycles,
   DeliveryFinding,
+  DeliveryStage,
   DeliveryTerminalFailure,
   DeliveryTerminalResult,
   RoleConfig,
@@ -28,12 +29,12 @@ import type {
   ToolAccess,
   ToolGrant,
 } from './types'
-
 export interface Config extends ConfigInterface {}
 export type {
   DeliveryCallArgs,
   DeliveryCycles,
   DeliveryFinding,
+  DeliveryStage,
   DeliveryTerminalFailure,
   DeliveryTerminalResult,
   RoleConfig,
@@ -104,16 +105,17 @@ const PERSONAS: Readonly<Record<RoleName, string>> = {
 
 const WORKFLOW_META = {
   name: 'aop-delivery-workflow',
-  description: 'Plan, implement, review, and browser-test one delivery objective with evaluator feedback loops.',
+  description: 'Plan, implement, review, browser-test, and optionally ship one delivery objective with evaluator feedback loops.',
   phases: [
     { title: 'Plan' },
     { title: 'Implementation' },
     { title: 'Review' },
     { title: 'QA' },
+    { title: 'Ship' },
   ],
 }
 
-const DESCRIPTION = 'Run an AOP software delivery workflow for one implementation objective. A planner creates an accepted plan, the implementation role changes the shared workspace, an independent reviewer returns every finding to implementation until review passes, and browser QA returns product defects through implementation and review before completion.'
+const DESCRIPTION = 'Run an AOP software delivery workflow for one implementation objective. A planner creates an accepted plan, the implementation role changes the shared workspace, an independent reviewer returns every finding to implementation until review passes, and browser QA returns product defects through implementation and review before completion. In yolo mode a ship pass then opens a pull request, verifies CI, fixes issues, and merges automatically.'
 
 const OUTPUT_PROPERTIES = {
   runId: { type: 'string', required: true },
@@ -291,6 +293,12 @@ function resolveMaxCycles(requested: number | undefined, ceiling: number): numbe
   return value
 }
 
+function resolveShipMode(mode: unknown): boolean {
+  if (mode === undefined || mode === 'standard') return false
+  if (mode === 'yolo') return true
+  throw new TypeError('mode must be standard or yolo')
+}
+
 function validateQaUrl(value: string): string {
   const normalized = normalizedText(value, 'qaUrl')
   let url: URL
@@ -319,24 +327,38 @@ function readCycles(value: unknown, maxCycles: number): DeliveryCycles {
   return { implementation, review, qa }
 }
 
-function readTerminalResult(value: unknown, maxCycles: number): DeliveryTerminalResult {
+const DELIVERY_STAGES = [...ROLE_NAMES, 'ship']
+
+function readTerminalResult(value: unknown, maxCycles: number, shipMode: boolean): DeliveryTerminalResult {
   if (!isRecord(value) || typeof value['status'] !== 'string') throw new Error('Delivery workflow returned a malformed terminal result')
   const cycles = readCycles(value['cycles'], maxCycles)
   if (value['status'] === 'completed') {
-    if (Object.keys(value).sort().join(',') !== 'cycles,implementation,plan,qa,review,status'
+    const keys = ['cycles', 'implementation', 'plan', 'qa', 'review', 'status', ...(shipMode ? ['ship'] : [])]
+    if (Object.keys(value).sort().join(',') !== keys.sort().join(',')
       || cycles.implementation < 1 || cycles.review !== cycles.implementation || cycles.qa < 1
       || !isRecord(value['review']) || value['review']['status'] !== 'pass'
-      || !isRecord(value['qa']) || value['qa']['status'] !== 'pass') throw new Error('Delivery workflow returned an invalid completed result')
-    return { status: 'completed', cycles, plan: value['plan'], implementation: value['implementation'], review: value['review'], qa: value['qa'] }
+      || !isRecord(value['qa']) || value['qa']['status'] !== 'pass'
+      || (shipMode && (!isRecord(value['ship']) || value['ship']['status'] !== 'shipped'))) {
+      throw new Error('Delivery workflow returned an invalid completed result')
+    }
+    return {
+      status: 'completed',
+      cycles,
+      plan: value['plan'],
+      implementation: value['implementation'],
+      review: value['review'],
+      qa: value['qa'],
+      ...(shipMode ? { ship: value['ship'] } : {}),
+    }
   }
   if (!['blocked', 'cycle-limit', 'stage-failed'].includes(value['status'])
     || Object.keys(value).sort().join(',') !== 'cycles,message,pendingFindings,stage,status'
-    || !ROLE_NAMES.includes(value['stage'] as RoleName)
+    || !DELIVERY_STAGES.includes(value['stage'] as string)
     || typeof value['message'] !== 'string' || value['message'].length === 0
     || !Array.isArray(value['pendingFindings'])) throw new Error('Delivery workflow returned an invalid failure result')
   return {
     status: value['status'] as DeliveryTerminalFailure['status'],
-    stage: value['stage'] as RoleName,
+    stage: value['stage'] as DeliveryStage,
     message: value['message'],
     cycles,
     pendingFindings: value['pendingFindings'] as DeliveryFinding[],
@@ -616,7 +638,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'tool:aop-delivery',
     order: 117,
-    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop command. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA, or returns an error with the blocker or unresolved findings.',
+    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop and /aopy commands. In yolo mode the workflow additionally ships: pull request, CI verification, issue fixes, and automatic merge. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA (and, in yolo mode, the change is merged), or returns an error with the blocker or unresolved findings.',
   })
 
   const toolDefinition = defineTool({
@@ -627,6 +649,7 @@ export function apply(ctx: Context, config: Config): void {
       qaUrl: { type: 'string', description: 'Optional absolute HTTP(S) URL that browser QA must exercise; when omitted QA discovers the deliverable target from the plan and workspace.' },
       qaInstructions: { type: 'string', description: 'Optional concrete browser behavior and outcomes QA must verify; when omitted QA derives them from the plan acceptance criteria.' },
       maxCycles: { type: 'number', description: 'Optional implementation-pass cap bounded by deployment policy.' },
+      mode: { type: 'string', enum: ['standard', 'yolo'], description: 'yolo runs the ship pass after QA passes: pull request, CI verification, issue fixes, automatic merge.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: OUTPUT_PROPERTIES },
@@ -639,6 +662,7 @@ export function apply(ctx: Context, config: Config): void {
       const qaUrl = args.qaUrl === undefined ? undefined : validateQaUrl(args.qaUrl)
       const qaInstructions = args.qaInstructions === undefined ? undefined : normalizedText(args.qaInstructions, 'qaInstructions')
       const maxCycles = resolveMaxCycles(args.maxCycles, resolved.maxCycles)
+      const shipMode = resolveShipMode(args.mode)
       validateProvider(ctx, resolved.subagentProvider, resolved.roles)
       validateRoleTools(ctx, parent, resolved.roles)
       await preflightRoleModels(ctx, resolved.roles, exec.signal)
@@ -648,7 +672,7 @@ export function apply(ctx: Context, config: Config): void {
       const qaEvidenceTools = new Set(resolved.roles.qa.tools
         .filter(tool => tool.browserEvidence === true)
         .map(tool => tool.name))
-      const maxTotalAgents = 1 + 3 * maxCycles
+      const maxTotalAgents = 1 + 3 * maxCycles + (shipMode ? 1 : 0)
       if (!Number.isSafeInteger(maxTotalAgents)) throw new TypeError('AOP delivery workflow child ceiling exceeds the safe integer range')
       const validateChildResult = (info: WorkflowChildValidationInfo, result: unknown): void => {
         const session = sessionForChild(ctx, parent, info)
@@ -674,6 +698,7 @@ export function apply(ctx: Context, config: Config): void {
           qaUrl,
           qaInstructions,
           maxCycles,
+          ship: shipMode,
           maxFindings: resolved.maxFindings,
           maxArtifactChars: resolved.maxArtifactChars,
           roles: Object.fromEntries(ROLE_NAMES.map(role => [
@@ -703,10 +728,10 @@ export function apply(ctx: Context, config: Config): void {
       }
       const offPhase = ctx.on('workflow/phase', (info: any, title: string) => {
         if (info.id !== run.id) return
-        if (title === 'Implementation') {
-          // Implementation is the only role that legitimately drives external
-          // pipelines (CI, releases); the run cap bounds it, not the
-          // evaluator-phase budget. Clear any armed evaluator timer.
+        if (title === 'Implementation' || title === 'Ship') {
+          // Implementation and Ship are the only phases that legitimately
+          // drive external pipelines (CI, releases); the run cap bounds
+          // them, not the evaluator-phase budget. Clear any armed timer.
           clearTimeout(phaseTimer)
           phaseTimer = undefined
           return
@@ -719,7 +744,7 @@ export function apply(ctx: Context, config: Config): void {
         const settled = await run.result
         const error = workflowError(settled)
         if (error !== undefined) throw new Error(error)
-        const terminal = readTerminalResult(settled.value, maxCycles)
+        const terminal = readTerminalResult(settled.value, maxCycles, shipMode)
         if (terminal.status !== 'completed') {
           throw new Error(requireBoundedResult(renderFailure(terminal), resolved.maxResultChars))
         }
@@ -748,32 +773,36 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(toolDefinition)
 
-  const registerAopCommand = () => ctx.commands.register({
-    name: 'aop',
-    description: 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)',
+  const registerAopCommand = (name: 'aop' | 'aopy', description: string, mode: 'standard' | 'yolo') => ctx.commands.register({
+    name,
+    description,
     input: { hint: '<objective>' },
     recordInput: false,
     handler: (invocation: any) => {
       const objective = invocation.rawInput.trim()
       if (objective.length === 0) {
-        return Promise.resolve({ kind: 'error', text: 'Usage: /aop <objective>' })
+        return Promise.resolve({ kind: 'error', text: `Usage: /${name} <objective>` })
       }
       // Route through the agent so the workflow runs inside the normal loop:
       // tool calls, workflow phases, and child sessions then stream in the
       // trajectory instead of running silently behind the command plane. The
       // user/message is the authoritative payload (command/run omits args).
+      const modeArg = mode === 'yolo' ? " and pass 'yolo' as the mode argument" : ''
       invocation.agent.followup(createUserMessage({
-        content: [{ type: 'text', text: 'The direct human issued the /aop command with this objective. Run the AOP delivery workflow (call the aop_delivery tool) and pass the objective below verbatim as the objective argument:\n' + objective }],
-        source: { kind: 'plugin', plugin: 'aop', form: 'notice', summary: boundContextSummary('AOP delivery requested: ' + objective) },
+        content: [{ type: 'text', text: `The direct human issued the /${name} command with this objective. Run the AOP delivery workflow (call the aop_delivery tool), pass the objective below verbatim as the objective argument${modeArg}:\n` + objective }],
+        source: { kind: 'plugin', plugin: 'aop', form: 'notice', summary: boundContextSummary(`AOP ${mode === 'yolo' ? 'YOLO ' : ''}delivery requested: ` + objective) },
       }))
       return Promise.resolve({
         kind: 'success',
-        text: 'AOP delivery requested — the agent will plan, implement, review, and browser-test; watch the trajectory for progress.',
+        text: mode === 'yolo'
+          ? 'AOP YOLO delivery requested — the agent will plan, implement, review, browser-test, then open a PR, verify CI, fix issues, and merge automatically; watch the trajectory for progress.'
+          : 'AOP delivery requested — the agent will plan, implement, review, and browser-test; watch the trajectory for progress.',
       })
     },
   })
 
   ctx.effect(function* () {
-    yield registerAopCommand()
+    yield registerAopCommand('aop', 'Run AOP software delivery workflow (Plan -> Implementation -> Review -> Browser QA)', 'standard')
+    yield registerAopCommand('aopy', 'Run AOP YOLO delivery workflow (same as /aop, then create a PR, verify CI/CD, fix conflicts or issues, and merge automatically)', 'yolo')
   }, 'aop command lifecycle')
 }
