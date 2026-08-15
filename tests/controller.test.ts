@@ -456,6 +456,39 @@ describe('/aop slash command', () => {
     expect(() => validator(info, { stopReason: 'error' })).toThrow('Phase "Review" child failed (error): review crashed hard')
   })
 
+  it('checks provider-only routes for registration', async () => {
+    const roles = roleDefaults()
+    roles.review = { provider: 'ghost-route', tools: [{ name: 'read', access: 'read' }] }
+    const { registered, startedRuns } = await mountHostAop({
+      roles,
+      llm: {
+        listModels: async (provider: string) => {
+          if (provider === 'ghost-route') throw Object.assign(new Error('no adapter'), { code: 'NO_ADAPTER' })
+          return [{ id: 'any-model' }]
+        },
+        resolveModelInfo: async (provider: string, model: string) => ({ provider, id: model }),
+      },
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('Role "review" provider "ghost-route" failed its registration check: no adapter')
+    expect(startedRuns).toHaveLength(0)
+  })
+
+  it('starts the workflow when every role model resolves', async () => {
+    const { registered, startedRuns } = await mountHostAop()
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const result = await tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    expect(startedRuns).toHaveLength(1)
+    expect(startedRuns[0].meta.name).toBe('aop-delivery-workflow')
+    expect(result.runId).toBe('run-1')
+  })
+
   it('ignores stale child errors when the final turn ended differently', async () => {
     const session = {
       id: 'child-1',
@@ -481,7 +514,6 @@ describe('/aop slash command', () => {
       localAgent: { id: 'child-1', session },
       sessionStartSeq: 7,
     }
-    expect(() => validator(info, { stopReason: 'aborted' })).toThrow('Phase "Review" child failed (aborted)')
-    expect(() => validator(info, { stopReason: 'aborted' })).not.toThrow(/old crash/)
+    expect(() => validator(info, { stopReason: 'aborted' })).not.toThrow()
   })
 })

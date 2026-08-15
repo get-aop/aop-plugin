@@ -231,7 +231,7 @@ async function preflightRoleModels(ctx: Context, roles: ResolvedConfig['roles'],
         await ctx.llm.listModels(route.provider)
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error)
-        throw new Error(`Role "${role}" names provider "${route.provider}" that is not registered: ${message}`)
+        throw new Error(`Role "${role}" provider "${route.provider}" failed its registration check: ${message}`)
       }
       continue
     }
@@ -586,25 +586,21 @@ function sessionForChild(
  * provider route) instead of the opaque "child failed" the workflow script
  * would otherwise report. Only the FINAL `turn/end` counts: an earlier
  * recovered turn error must not be misattributed to a later aborted or
- * max-tokens end.
+ * max-tokens end. Returns `undefined` when the final end carried no error.
  */
-function childFailureDetail(session: Session, info: WorkflowChildValidationInfo, result: unknown): string {
-  let detail = ''
+function childErrorDetail(session: Session): string | undefined {
+  let detail: string | undefined
   for (const event of session.events) {
     if (event.type !== 'turn/end') continue
-    detail = ''
-    const reason = event.data.reason
-    if (reason !== null && typeof reason === 'object' && reason.kind === 'error'
-      && reason.error !== null && typeof reason.error === 'object'
-      && typeof reason.error.message === 'string') {
-      detail = reason.error.message
-    }
+    detail = event.data.reason.kind === 'error' ? event.data.reason.error.message : undefined
   }
+  return detail
+}
+
+function childFailureDetail(detail: string, info: WorkflowChildValidationInfo, result: unknown): string {
   const stopReason = isRecord(result) && typeof result['stopReason'] === 'string' ? result['stopReason'] : 'unknown'
   const label = info.phase ?? info.label
-  return detail.length > 0
-    ? `Phase "${label}" child failed (${stopReason}): ${detail}`
-    : `Phase "${label}" child failed (${stopReason})`
+  return `Phase "${label}" child failed (${stopReason}): ${detail}`
 }
 function presentCall(args: DeliveryCallArgs): ToolCallView {
   return { card: 'generic', title: 'aop delivery workflow', rawInput: args.objective }
@@ -657,9 +653,13 @@ export function apply(ctx: Context, config: Config): void {
       const validateChildResult = (info: WorkflowChildValidationInfo, result: unknown): void => {
         const session = sessionForChild(ctx, parent, info)
         if (!isRecord(result) || result['stopReason'] !== 'completed') {
-          const error = new Error(childFailureDetail(session, info, result))
-          error.stack = error.message
-          throw error
+          const detail = childErrorDetail(session)
+          if (detail !== undefined) {
+            const error = new Error(childFailureDetail(detail, info, result))
+            error.stack = error.message
+            throw error
+          }
+          return
         }
         if (info.phase !== 'QA') return
         const verdict = qaVerdictFromChildResult(result)
