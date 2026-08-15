@@ -368,8 +368,7 @@ function workflowError(result: WorkflowResult): string | undefined {
   switch (result.stopReason) {
     case 'completed': return undefined
     case 'cancelled': return `Delivery workflow was cancelled${result.error === undefined ? '' : ` (${result.error})`}`
-    case 'error': return `Delivery workflow failed: ${result.error ?? 'unknown error'}`
-    default: return `Delivery workflow ended abnormally (${String(result.stopReason)})`
+    case 'error': return `Delivery workflow failed: ${result.error ?? 'unknown error'} — this is a workflow infrastructure fault; do not retry and do not debug harness internals, report it to the human.`
   }
 }
 
@@ -378,7 +377,7 @@ function renderSuccess(result: unknown): string {
 }
 
 function renderFailure(result: DeliveryTerminalFailure): string {
-  return `AOP delivery workflow ${result.status} at ${result.stage}: ${result.message}\nPending findings:\n${JSON.stringify(result.pendingFindings)}`
+  return `AOP delivery workflow ${result.status} at ${result.stage}: ${result.message}\nPending findings:\n${JSON.stringify(result.pendingFindings)}\nThis is a terminal workflow outcome. Report it to the human; do not re-invoke aop_delivery for the same objective.`
 }
 
 function requireBoundedResult(text: string, maxChars: number): string {
@@ -637,7 +636,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'tool:aop-delivery',
     order: 117,
-    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop and /aopy commands. In yolo mode the workflow additionally ships: pull request, CI verification, issue fixes, and automatic merge. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA (and, in yolo mode, the change is merged), or returns an error with the blocker or unresolved findings.',
+    text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop and /aopy commands. In yolo mode the workflow additionally ships: pull request, CI verification, issue fixes, and automatic merge. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA (and, in yolo mode, the change is merged), or returns an error with the blocker or unresolved findings. If aop_delivery returns an error or a failed outcome, that is the workflow\'s final verdict for this invocation: report it and the pending findings to the human. Never re-invoke aop_delivery with the same objective to retry an error, and never debug the workflow or harness internals — the workspace may already contain the delivered changes from the failed run.',
   })
 
   const toolDefinition = defineTool({

@@ -439,7 +439,49 @@ describe('/aop slash command', () => {
       { agent: {}, signal: new AbortController().signal },
     )).rejects.toThrow('invalid completed result')
   })
+
+  it('marks failure terminals and infrastructure errors as non-retryable', async () => {
+    const stageFailed = await mountHostAop({
+      run: () => ({
+        id: 'run-1',
+        result: Promise.resolve({
+          stopReason: 'completed',
+          agentsStarted: 1,
+          value: {
+            status: 'stage-failed',
+            stage: 'plan',
+            message: 'ready plan needs steps, acceptance criteria, and no blocker',
+            cycles: { implementation: 0, review: 0, qa: 0 },
+            pendingFindings: [],
+          },
+        }),
+        cancel: () => {},
+        dispose: () => Promise.resolve(),
+      }),
+    })
+    const tool = stageFailed.registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('This is a terminal workflow outcome. Report it to the human; do not re-invoke aop_delivery for the same objective.')
+
+    const infra = await mountHostAop({
+      run: () => ({
+        id: 'run-1',
+        result: Promise.resolve({ stopReason: 'error', error: 'boom', agentsStarted: 0, value: undefined }),
+        cancel: () => {},
+        dispose: () => Promise.resolve(),
+      }),
+    })
+    const infraTool = infra.registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(infraTool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('do not retry and do not debug harness internals')
+  })
+
   it('rejects an unknown mode', async () => {
+
     const { registered, startedRuns } = await mountHostAop()
     const tool = registered.find((def: any) => def.name === 'aop_delivery')
     await expect(tool.execute(

@@ -272,34 +272,36 @@ function roleOptions(role, schema, label, phaseName) {
 function failure(status, stage, message, cycles, pendingFindings) {
   return { status, stage, message, cycles, pendingFindings }
 }
+function stageChecked(fn) {
+  try {
+    return { ok: true, value: fn() }
+  } catch (error) {
+    return { ok: false, message: String((error && error.message) || error) }
+  }
+}
 function findingKey(finding) {
   return JSON.stringify(['id', 'severity', 'summary', 'evidence', 'location', 'remediation'].map(key => finding[key]))
 }
 function mergeFindings(...groups) {
-  const merged = []
-  const seenKeys = new Set()
+  const byId = new Map()
   for (const group of groups) {
     for (const finding of group.findings) {
-      const key = group.source + ':' + findingKey(finding)
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key)
-        merged.push({ ...finding, id: group.source + ':' + finding.id })
+      const entry = byId.get(finding.id) || []
+      if (!entry.some(candidate => candidate.key === findingKey(finding))) {
+        entry.push({ finding, source: group.source, key: findingKey(finding) })
+        byId.set(finding.id, entry)
       }
     }
   }
-  const uniqueIdMerged = []
-  const usedIds = new Set()
-  for (const item of merged) {
-    let finalId = item.id
-    let counter = 1
-    while (usedIds.has(finalId)) {
-      counter++
-      finalId = item.id + '-' + counter
+  const merged = []
+  for (const entries of byId.values()) {
+    if (entries.length === 1) {
+      merged.push(entries[0].finding)
+    } else {
+      for (const entry of entries) merged.push({ ...entry.finding, id: entry.source + ':' + entry.finding.id })
     }
-    usedIds.add(finalId)
-    uniqueIdMerged.push({ ...item, id: finalId })
   }
-  return uniqueIdMerged
+  return merged
 }
 function terminalFindings() {
   return mergeFindings(
@@ -315,7 +317,9 @@ const rawPlan = await agent([
   'Return ready only when the plan has concrete ordered steps and observable acceptance criteria. Give every criterion a stable id other than QA-INSTRUCTIONS plus a requirement and browser-verifiable method. Return blocked only for an external prerequisite that inspection cannot resolve.',
 ].join('\n\n'), roleOptions('plan', planSchema, 'Delivery plan', 'Plan'))
 if (rawPlan === null) return failure('stage-failed', 'plan', 'Planner child failed', { implementation: 0, review: 0, qa: 0 }, [])
-const plan = validatePlan(rawPlan)
+const checkedPlan = stageChecked(() => validatePlan(rawPlan))
+if (!checkedPlan.ok) return failure('stage-failed', 'plan', checkedPlan.message, { implementation: 0, review: 0, qa: 0 }, [])
+const plan = checkedPlan.value
 if (plan.status === 'blocked') return failure('blocked', 'plan', plan.blocker, { implementation: 0, review: 0, qa: 0 }, [])
 
 let implementation
@@ -339,12 +343,16 @@ while (true) {
     'Feedback source: ' + feedbackSource,
     'Pending findings:\n' + JSON.stringify(pendingFindings),
     'Previous implementation artifact:\n' + JSON.stringify(implementation ?? null),
-    'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.',
+    pendingFindings.length === 0
+      ? 'Inspect current workspace state, implement every pending item, and run focused verification. There are no pending findings: addressedFindingIds must be an empty array. If the objective already appears implemented in the workspace (for example by a previous run), verify it and report status and changedFiles honestly; do not invent finding ids. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.'
+      : 'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id in addressedFindingIds. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.',
     ...(args.ship === true ? ['The ship pass after QA owns the PR, CI verification, and merge: do not push, open pull requests, or merge anything yourself. Leave your delivered changes committed (or uncommitted) in the workspace.'] : []),
   ].join('\n\n'), roleOptions('implementation', implementationSchema, 'Implementation pass ' + cycles.implementation, 'Implementation'))
   if (rawImplementation === null) return failure('stage-failed', 'implementation', 'Implementation child failed', cycles, terminalFindings())
   const pendingIds = pendingFindings.map(finding => finding.id)
-  implementation = validateImplementation(rawImplementation, pendingIds, pendingFindings.length > 0)
+  const checkedImplementation = stageChecked(() => validateImplementation(rawImplementation, pendingIds, pendingFindings.length > 0))
+  if (!checkedImplementation.ok) return failure('stage-failed', 'implementation', checkedImplementation.message, cycles, terminalFindings())
+  implementation = checkedImplementation.value
   if (implementation.status === 'blocked') return failure('blocked', 'implementation', implementation.blocker, cycles, terminalFindings())
   if (pendingFindings.length > 0 && implementation.status === 'unchanged') {
     return failure('stage-failed', 'implementation', 'implementation stalled with unresolved findings', cycles, terminalFindings())
@@ -361,7 +369,9 @@ while (true) {
     'Read the actual changed code and relevant call sites. Verify claimed fixes and acceptance criteria. Pass only with zero findings.',
   ].join('\n\n'), roleOptions('review', reviewSchema, 'Review pass ' + cycles.review, 'Review'))
   if (rawReview === null) return failure('stage-failed', 'review', 'Review child failed', cycles, terminalFindings())
-  review = validateReview(rawReview)
+  const checkedReview = stageChecked(() => validateReview(rawReview))
+  if (!checkedReview.ok) return failure('stage-failed', 'review', checkedReview.message, cycles, terminalFindings())
+  review = checkedReview.value
   if (review.status === 'blocked') return failure('blocked', 'review', review.blocker, cycles, terminalFindings())
   if (review.status === 'changes-required') {
     pendingFindings = mergeFindings(
@@ -403,9 +413,10 @@ while (true) {
   qaPromptParts.push(
     'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)). Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
   )
-  const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())
-  qa = validateQa(rawQa, plan.acceptanceCriteria, qaRetestFindings)
+  const checkedQa = stageChecked(() => validateQa(rawQa, plan.acceptanceCriteria, qaRetestFindings))
+  if (!checkedQa.ok) return failure('stage-failed', 'qa', checkedQa.message, cycles, terminalFindings())
+  qa = checkedQa.value
   if (qa.status === 'blocked') return failure('blocked', 'qa', qa.blocker, cycles, terminalFindings())
   if (qa.status === 'changes-required') {
     pendingFindings = mergeFindings({ source: 'qa', findings: qa.findings })
@@ -427,7 +438,9 @@ while (true) {
       'Inspect the workspace git state (branch, remotes, working tree). Commit the delivered changes, push a branch, and open a pull request against the default branch. Then verify CI: poll the PR checks with at most three status checks per pipeline run and never with sleep loops. If CI fails, fix the failure in the branch, push, and re-check (again bounded). If the default branch moved, resolve the conflicts (merge or rebase) and push. When the checks are green, merge the PR and return shipped with the PR URL, merged true, and the CI outcome. Return blocked (with a concrete blocker) only for an external prerequisite you cannot resolve: no git remote, no push permission, no CI configured, or an unresolvable conflict. Never claim a merge that did not happen.',
     ].join('\n\n'), roleOptions('implementation', shipSchema, 'Ship pass', 'Ship'))
     if (rawShip === null) return failure('stage-failed', 'ship', 'Ship child failed', cycles, terminalFindings())
-    const ship = validateShip(rawShip)
+    const checkedShip = stageChecked(() => validateShip(rawShip))
+    if (!checkedShip.ok) return failure('stage-failed', 'ship', checkedShip.message, cycles, terminalFindings())
+    const ship = checkedShip.value
     if (ship.status === 'blocked') return failure('blocked', 'ship', ship.blocker, cycles, terminalFindings())
     return { status: 'completed', cycles, plan, implementation, review, qa, ship }
   }
