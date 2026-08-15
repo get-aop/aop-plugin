@@ -38,11 +38,16 @@ Each role runs with independent context, specific model/thinking profiles, tailo
 ```mermaid
 stateDiagram-v2
     [*] --> Plan: Objective / Ticket
+    Plan --> Implementation: Ready Plan (ACs defined)
+    Implementation --> Review: Changes Made + Verified
+    Review --> Implementation: Changes Required (Findings)
+    Review --> QA: Pass (0 Review Findings)
     QA --> Implementation: Changes Required (QA Defects)
     QA --> Ship: Pass (All ACs Verified) — yolo mode only
     Ship --> Completed: PR Opened, CI Green, Merged
     Ship --> Blocked: No Remote / No CI / Unresolvable Conflict
     QA --> Completed: Pass (All ACs Verified)
+    Plan --> Blocked: External Dependency
     Implementation --> Blocked: Blocker Reported
     Review --> Blocked: Blocker Reported
     QA --> Blocked: Blocker Reported

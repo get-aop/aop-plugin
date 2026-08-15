@@ -111,7 +111,6 @@ const WORKFLOW_META = {
     { title: 'Implementation' },
     { title: 'Review' },
     { title: 'QA' },
-    { title: 'Ship' },
   ],
 }
 
@@ -203,7 +202,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxResultChars = positiveInteger(config.maxResultChars ?? 262_144, 'maxResultChars')
   const runTimeoutMs = positiveInteger(config.runTimeoutMs ?? 3_600_000, 'runTimeoutMs')
   const phaseTimeoutMs = positiveInteger(config.phaseTimeoutMs ?? 1_800_000, 'phaseTimeoutMs')
-  const minimumResultChars = maxArtifactChars * ROLE_NAMES.length + RESULT_OVERHEAD_CHARS
+  const minimumResultChars = maxArtifactChars * (ROLE_NAMES.length + 1) + RESULT_OVERHEAD_CHARS
   if (!Number.isSafeInteger(minimumResultChars) || maxResultChars < minimumResultChars) {
     throw new TypeError(`maxResultChars must be at least ${minimumResultChars} for maxArtifactChars ${maxArtifactChars}`)
   }
@@ -353,7 +352,7 @@ function readTerminalResult(value: unknown, maxCycles: number, shipMode: boolean
   }
   if (!['blocked', 'cycle-limit', 'stage-failed'].includes(value['status'])
     || Object.keys(value).sort().join(',') !== 'cycles,message,pendingFindings,stage,status'
-    || !DELIVERY_STAGES.includes(value['stage'] as string)
+    || !(shipMode ? DELIVERY_STAGES : ROLE_NAMES as readonly string[]).includes(value['stage'] as string)
     || typeof value['message'] !== 'string' || value['message'].length === 0
     || !Array.isArray(value['pendingFindings'])) throw new Error('Delivery workflow returned an invalid failure result')
   return {
@@ -692,7 +691,7 @@ export function apply(ctx: Context, config: Config): void {
       }
       const run: WorkflowRun = ctx.workflowEngine.start({
         script: AOP_DELIVERY_WORKFLOW_SCRIPT,
-        meta: WORKFLOW_META,
+        meta: shipMode ? { ...WORKFLOW_META, phases: [...WORKFLOW_META.phases, { title: 'Ship' }] } : WORKFLOW_META,
         args: {
           objective,
           qaUrl,

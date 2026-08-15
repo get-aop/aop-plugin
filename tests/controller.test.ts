@@ -403,6 +403,33 @@ describe('/aop slash command', () => {
     )).rejects.toThrow('blocked at ship: no git remote configured')
   })
 
+  it('rejects a yolo completion whose ship artifact is not shipped', async () => {
+    const { registered } = await mountHostAop({
+      run: () => ({
+        id: 'run-1',
+        result: Promise.resolve({
+          stopReason: 'completed',
+          agentsStarted: 5,
+          value: {
+            status: 'completed',
+            cycles: { implementation: 1, review: 1, qa: 1 },
+            plan: {},
+            implementation: {},
+            review: { status: 'pass' },
+            qa: { status: 'pass' },
+            ship: { status: 'blocked', summary: 'x', prUrl: '', merged: false, ci: '', blocker: 'no remote' },
+          },
+        }),
+        cancel: () => {},
+        dispose: () => Promise.resolve(),
+      }),
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.', mode: 'yolo' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('invalid completed result')
+  })
   it('rejects an unknown mode', async () => {
     const { registered, startedRuns } = await mountHostAop()
     const tool = registered.find((def: any) => def.name === 'aop_delivery')
@@ -543,6 +570,8 @@ describe('/aop slash command', () => {
     while (phaseListener === undefined) await Promise.resolve()
     phaseListener({ id: 'run-1', meta: {} }, 'Plan')
     phaseListener({ id: 'run-1', meta: {} }, 'Implementation')
+    await new Promise(resolve => setTimeout(resolve, 40))
+    phaseListener({ id: 'run-1', meta: {} }, 'Ship')
     await new Promise(resolve => setTimeout(resolve, 40))
     expect(cancels).toEqual([])
     phaseListener({ id: 'run-1', meta: {} }, 'Review')

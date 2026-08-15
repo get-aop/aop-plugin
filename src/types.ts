@@ -55,6 +55,10 @@ export interface Config {
 export interface DeliveryCallArgs {
   /** The complete implementation objective or ticket. */
   objective: string
+  /** Optional absolute HTTP(S) URL for browser QA; when omitted QA discovers the target from the plan and workspace. */
+  qaUrl?: string
+  /** Optional concrete browser behavior and outcomes QA must verify; when omitted QA derives them from the plan's acceptance criteria. */
+  qaInstructions?: string
   /** Optional implementation-pass cap bounded by deployment policy. */
   maxCycles?: number
   /** `yolo` runs the ship pass after QA: PR, CI verification, conflict/issue fixes, automatic merge. */
