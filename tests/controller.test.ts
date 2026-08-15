@@ -185,6 +185,11 @@ describe('AOP delivery workflow script', () => {
     // The worker evaluates this string in a bare vm realm; a syntax error here
     // would break every run at script evaluation time.
     expect(() => new Function('async function script(args, agent, phase) {\n' + AOP_DELIVERY_WORKFLOW_SCRIPT + '\n}')).not.toThrow()
+    // Every role's agent() call must survive edits; a dropped line parses fine
+    // but leaves the role undefined at runtime (QA historically the victim).
+    for (const call of ['const rawPlan = await agent(', 'const rawImplementation = await agent(', 'const rawReview = await agent(', 'const rawQa = await agent(', 'const rawShip = await agent(']) {
+      expect(AOP_DELIVERY_WORKFLOW_SCRIPT).toContain(call)
+    }
   })
 })
 

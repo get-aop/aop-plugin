@@ -413,6 +413,7 @@ while (true) {
   qaPromptParts.push(
     'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)). Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
   )
+  const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())
   const checkedQa = stageChecked(() => validateQa(rawQa, plan.acceptanceCriteria, qaRetestFindings))
   if (!checkedQa.ok) return failure('stage-failed', 'qa', checkedQa.message, cycles, terminalFindings())
