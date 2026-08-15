@@ -212,20 +212,28 @@ function resolveConfig(config: Config): ResolvedConfig {
  * Fail before the workflow starts when a role names a provider/model route the
  * deployment does not serve, so a misconfigured evaluator surfaces as an
  * immediate, readable error instead of a later "child failed" terminal.
+ *
+ * The check uses `resolveModelInfo` — the route-owning adapter's authoritative
+ * exact-model lookup — rather than the advisory catalog, so pass-through
+ * adapters that serve unlisted model ids are not falsely rejected.
  */
 async function preflightRoleModels(ctx: Context, roles: ResolvedConfig['roles']): Promise<void> {
   for (const role of ROLE_NAMES) {
     const route = roles[role]
     if (route.provider === undefined || route.model === undefined) continue
-    let models: readonly { id: string }[]
     try {
-      models = await ctx.llm.listModels(route.provider)
+      await ctx.llm.resolveModelInfo(route.provider, route.model)
     } catch (error: unknown) {
-      throw new Error(`Role "${role}" names provider "${route.provider}" that is not registered: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    if (!models.some(model => model.id === route.model)) {
-      const available = models.map(model => model.id).join(', ')
-      throw new Error(`Role "${role}" route is misconfigured: provider "${route.provider}" has no model "${route.model}"${available.length === 0 ? '' : ` (available: ${available})`}`)
+      const code = isRecord(error) && typeof error['code'] === 'string' ? `${error['code']}: ` : ''
+      const message = error instanceof Error ? error.message : String(error)
+      let available = ''
+      try {
+        const models = await ctx.llm.listModels(route.provider)
+        if (models.length > 0) available = ` (available: ${models.map((model: any) => model.id).join(', ')})`
+      } catch {
+        // Provider is not registered at all: nothing to list.
+      }
+      throw new Error(`Role "${role}" route ${route.provider}/${route.model} is not served by this deployment: ${code}${message}${available}`)
     }
   }
 }

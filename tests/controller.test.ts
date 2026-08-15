@@ -199,6 +199,12 @@ describe('/aop slash command', () => {
       },
       llm: {
         listModels: async (provider: string) => (modelCatalog[provider] ?? []).map((id: string) => ({ id })),
+        resolveModelInfo: async (provider: string, model: string) => {
+          const list = modelCatalog[provider]
+          if (list === undefined) throw Object.assign(new Error('no adapter'), { code: 'NO_ADAPTER' })
+          if (!list.includes(model)) throw Object.assign(new Error(`unknown model "${model}"`), { code: 'UNKNOWN_MODEL' })
+          return { provider, id: model }
+        },
       },
       on: () => () => {},
       subagents: {
@@ -296,7 +302,7 @@ describe('/aop slash command', () => {
     await expect(tool.execute(
       { objective: 'Deliver something.' },
       { agent: {}, signal: new AbortController().signal },
-    )).rejects.toThrow('Role "review" route is misconfigured: provider "kimi-coding" has no model "kimi-k3"')
+    )).rejects.toThrow('Role "review" route kimi-coding/kimi-k3 is not served by this deployment: UNKNOWN_MODEL')
     expect(startedRuns).toHaveLength(0)
   })
 
