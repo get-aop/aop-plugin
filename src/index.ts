@@ -43,8 +43,7 @@ export type {
 }
 export { AOP_DELIVERY_WORKFLOW_SCRIPT } from './script'
 export const name = 'aop-delivery-workflow'
-export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt', 'sessions', 'commands']
-
+export const inject = ['tools', 'workflowEngine', 'subagents', 'systemPrompt', 'sessions', 'commands', 'llm']
 const toolGrantSchema = z.object({
   name: z.string().required(),
   access: z.union(['read', 'write'] as const).required(),
@@ -66,6 +65,8 @@ export const Config = z.object({
   maxFindings: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(64),
   maxArtifactChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(32_768),
   maxResultChars: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(262_144),
+  runTimeoutMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(3_600_000),
+  phaseTimeoutMs: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(1_800_000),
   roles: z.object({
     plan: roleConfigSchema.required(),
     implementation: roleConfigSchema.required(),
@@ -73,7 +74,6 @@ export const Config = z.object({
     qa: roleConfigSchema.required(),
   }).required(),
 })
-
 interface ResolvedRoleConfig {
   readonly provider?: string
   readonly model?: string
@@ -88,9 +88,10 @@ interface ResolvedConfig {
   readonly maxFindings: number
   readonly maxArtifactChars: number
   readonly maxResultChars: number
+  readonly runTimeoutMs: number
+  readonly phaseTimeoutMs: number
   readonly roles: Readonly<Record<RoleName, ResolvedRoleConfig>>
 }
-
 const ROLE_NAMES: readonly RoleName[] = ['plan', 'implementation', 'review', 'qa']
 const RESULT_OVERHEAD_CHARS = 1_024
 const TOOL_ERROR_PREFIX = 'Error: '
@@ -195,6 +196,8 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxFindings = positiveInteger(config.maxFindings ?? 64, 'maxFindings')
   const maxArtifactChars = positiveInteger(config.maxArtifactChars ?? 32_768, 'maxArtifactChars')
   const maxResultChars = positiveInteger(config.maxResultChars ?? 262_144, 'maxResultChars')
+  const runTimeoutMs = positiveInteger(config.runTimeoutMs ?? 3_600_000, 'runTimeoutMs')
+  const phaseTimeoutMs = positiveInteger(config.phaseTimeoutMs ?? 1_800_000, 'phaseTimeoutMs')
   const minimumResultChars = maxArtifactChars * ROLE_NAMES.length + RESULT_OVERHEAD_CHARS
   if (!Number.isSafeInteger(minimumResultChars) || maxResultChars < minimumResultChars) {
     throw new TypeError(`maxResultChars must be at least ${minimumResultChars} for maxArtifactChars ${maxArtifactChars}`)
@@ -202,7 +205,29 @@ function resolveConfig(config: Config): ResolvedConfig {
   const roles = Object.fromEntries(
     ROLE_NAMES.map(role => [role, resolveRole(role, config.roles[role])]),
   ) as Record<RoleName, ResolvedRoleConfig>
-  return { subagentProvider, maxCycles, maxFindings, maxArtifactChars, maxResultChars, roles }
+  return { subagentProvider, maxCycles, maxFindings, maxArtifactChars, maxResultChars, runTimeoutMs, phaseTimeoutMs, roles }
+}
+
+/**
+ * Fail before the workflow starts when a role names a provider/model route the
+ * deployment does not serve, so a misconfigured evaluator surfaces as an
+ * immediate, readable error instead of a later "child failed" terminal.
+ */
+async function preflightRoleModels(ctx: Context, roles: ResolvedConfig['roles']): Promise<void> {
+  for (const role of ROLE_NAMES) {
+    const route = roles[role]
+    if (route.provider === undefined || route.model === undefined) continue
+    let models: readonly { id: string }[]
+    try {
+      models = await ctx.llm.listModels(route.provider)
+    } catch (error: unknown) {
+      throw new Error(`Role "${role}" names provider "${route.provider}" that is not registered: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!models.some(model => model.id === route.model)) {
+      const available = models.map(model => model.id).join(', ')
+      throw new Error(`Role "${role}" route is misconfigured: provider "${route.provider}" has no model "${route.model}"${available.length === 0 ? '' : ` (available: ${available})`}`)
+    }
+  }
 }
 
 function validateProvider(ctx: Context, providerName: string, roles: ResolvedConfig['roles']): void {
@@ -534,6 +559,28 @@ function sessionForChild(
   return session
 }
 
+/**
+ * Surface the real reason a role child failed (e.g. an unknown model on its
+ * provider route) instead of the opaque "child failed" the workflow script
+ * would otherwise report.
+ */
+function childFailureDetail(session: Session, info: WorkflowChildValidationInfo, result: unknown): string {
+  let detail = ''
+  for (const event of session.events) {
+    if (event.type !== 'turn/end') continue
+    const reason = event.data.reason
+    if (reason !== null && typeof reason === 'object' && reason.kind === 'error'
+      && reason.error !== null && typeof reason.error === 'object'
+      && typeof reason.error.message === 'string') {
+      detail = reason.error.message
+    }
+  }
+  const stopReason = isRecord(result) && typeof result['stopReason'] === 'string' ? result['stopReason'] : 'unknown'
+  const label = info.phase ?? info.label
+  return detail.length > 0
+    ? `Phase "${label}" child failed (${stopReason}): ${detail}`
+    : `Phase "${label}" child failed (${stopReason})`
+}
 function presentCall(args: DeliveryCallArgs): ToolCallView {
   return { card: 'generic', title: 'aop delivery workflow', rawInput: args.objective }
 }
@@ -550,6 +597,7 @@ export function apply(ctx: Context, config: Config): void {
     order: 117,
     text: 'Use aop_delivery only when the direct human asks for the complete plan, implementation, independent review, and browser-QA delivery process — including objectives delivered by the /aop command. The workflow owns evaluator feedback loops and returns only after the latest implementation passes review and browser QA, or returns an error with the blocker or unresolved findings.',
   })
+
   const toolDefinition = defineTool({
     name: 'aop_delivery',
     description: DESCRIPTION,
@@ -572,6 +620,7 @@ export function apply(ctx: Context, config: Config): void {
       const maxCycles = resolveMaxCycles(args.maxCycles, resolved.maxCycles)
       validateProvider(ctx, resolved.subagentProvider, resolved.roles)
       validateRoleTools(ctx, parent, resolved.roles)
+      await preflightRoleModels(ctx, resolved.roles)
       const qaNavigationTool = resolved.roles.qa.tools
         .find(tool => tool.browserNavigation === true)?.name
       if (qaNavigationTool === undefined) throw new Error('AOP delivery workflow has no QA navigation tool')
@@ -582,6 +631,9 @@ export function apply(ctx: Context, config: Config): void {
       if (!Number.isSafeInteger(maxTotalAgents)) throw new TypeError('AOP delivery workflow child ceiling exceeds the safe integer range')
       const validateChildResult = (info: WorkflowChildValidationInfo, result: unknown): void => {
         const session = sessionForChild(ctx, parent, info)
+        if (!isRecord(result) || result['stopReason'] !== 'completed') {
+          throw new Error(childFailureDetail(session, info, result))
+        }
         if (info.phase !== 'QA') return
         const verdict = qaVerdictFromChildResult(result)
         if (verdict === undefined) return
@@ -615,6 +667,17 @@ export function apply(ctx: Context, config: Config): void {
       const onAbort = (): void => { run.cancel('parent step aborted') }
       exec.signal.addEventListener('abort', onAbort, { once: true })
       if (exec.signal.aborted) run.cancel('parent step aborted')
+      let phaseTitle = 'Plan'
+      let phaseTimer: ReturnType<typeof setTimeout> | undefined
+      const armPhaseTimer = (title: string): void => {
+        phaseTitle = title
+        clearTimeout(phaseTimer)
+        phaseTimer = setTimeout(() => { run.cancel(`phase "${phaseTitle}" exceeded phaseTimeoutMs`) }, resolved.phaseTimeoutMs)
+      }
+      const offPhase = ctx.on('workflow/phase', (info: any, title: string) => {
+        if (info.id === run.id) armPhaseTimer(title)
+      })
+      const runTimer = setTimeout(() => { run.cancel('workflow exceeded runTimeoutMs') }, resolved.runTimeoutMs)
       let runError: unknown
       try {
         const settled = await run.result
@@ -630,6 +693,9 @@ export function apply(ctx: Context, config: Config): void {
         runError = error
         throw boundedError(error, resolved.maxResultChars)
       } finally {
+        clearTimeout(runTimer)
+        clearTimeout(phaseTimer)
+        offPhase()
         exec.signal.removeEventListener('abort', onAbort)
         try {
           await run.dispose()
@@ -670,6 +736,7 @@ export function apply(ctx: Context, config: Config): void {
       })
     },
   })
+
   ctx.effect(function* () {
     yield registerAopCommand()
   }, 'aop command lifecycle')

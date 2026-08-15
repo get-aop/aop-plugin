@@ -311,7 +311,7 @@ while (true) {
     'Feedback source: ' + feedbackSource,
     'Pending findings:\n' + JSON.stringify(pendingFindings),
     'Previous implementation artifact:\n' + JSON.stringify(implementation ?? null),
-    'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id.',
+    'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id. Do not wait indefinitely for external processes such as CI or release pipelines: bound any status polling to a few checks, then return — review and browser QA run automatically after your artifact.',
   ].join('\n\n'), roleOptions('implementation', implementationSchema, 'Implementation pass ' + cycles.implementation, 'Implementation'))
   if (rawImplementation === null) return failure('stage-failed', 'implementation', 'Implementation child failed', cycles, terminalFindings())
   const pendingIds = pendingFindings.map(finding => finding.id)

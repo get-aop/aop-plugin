@@ -69,6 +69,8 @@ Mount the plugin in your `cordis.yml` profile or overlay:
     maxFindings: 64
     maxArtifactChars: 32768
     maxResultChars: 262144
+    runTimeoutMs: 3600000
+    phaseTimeoutMs: 1800000
     roles:
       plan:
         provider: deepseek
@@ -144,6 +146,11 @@ Invoked by an agent or user to execute the complete delivery lifecycle:
 | `qaUrl` | `string` | No | Absolute HTTP(S) target URL for browser QA. When omitted, QA discovers the deliverable itself — it inspects the workspace (package.json scripts, README, plan acceptance criteria) to find how the app runs and which URL it serves, and declares it in the QA artifact's `discoveredUrl`. Browser evidence is always pinned to one concrete target (given or discovered). |
 | `qaInstructions` | `string` | No | Concrete browser behaviors, interactions, and expected outcomes. When omitted, QA derives them from the plan's acceptance criteria and reports them under `QA-INSTRUCTIONS`. |
 | `maxCycles` | `number` | No | Optional implementation-pass ceiling (bounded by deployment policy). |
+
+> **Preflight model check**: before the workflow starts, every role's `provider`/`model` route is verified against the deployment's model catalog. A missing provider or model fails the tool call immediately with the available models listed, instead of surfacing later as an opaque "child failed".
+
+
+Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancels the current phase (Plan/Implementation/Review/QA) via the `workflow/phase` event stream.
 
 > **Discovery-mode trust boundary**: when `qaUrl` is omitted, the target is *declared by the QA model* in the artifact's `discoveredUrl`. The workflow enforces that navigation and evidence are pinned to exactly that declared URL (no navigation elsewhere can certify evidence), but it cannot verify that the declared URL is genuinely the deliverable — target *authenticity* is trusted to the QA model. For strict environments, always pass an explicit `qaUrl`.
 

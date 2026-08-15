@@ -180,17 +180,55 @@ describe('AopCardController', () => {
 })
 
 describe('/aop slash command', () => {
-  async function mountHostAop() {
+  async function mountHostAop(modelCatalog: Record<string, string[]> = {
+    'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
+    'kimi-coding': ['kimi-k3'],
+  }) {
     const registered: any[] = []
     const yields: unknown[] = []
     const regDisposer = () => {}
+    const startedRuns: any[] = []
     const ctx = {
       systemPrompt: { section: () => {} },
       tools: {
-        register: () => {},
+        register: (def: any) => { registered.push(def) },
+        get: (name: string) => ({ workspaceAccess: name === 'write' || name === 'edit' ? 'write' : 'read' }),
       },
       commands: {
         register: (def: any) => { registered.push(def); return regDisposer },
+      },
+      llm: {
+        listModels: async (provider: string) => (modelCatalog[provider] ?? []).map((id: string) => ({ id })),
+      },
+      on: () => () => {},
+      subagents: {
+        getProvider: () => ({
+          sessionBacked: true,
+          inheritsParentContext: false,
+          capabilities: { outputSchema: true, persona: true, toolFilter: true, toolAccess: true, toolPresentation: true },
+        }),
+      },
+      workflowEngine: {
+        start: (request: any) => {
+          startedRuns.push(request)
+          return {
+            id: 'run-1',
+            result: Promise.resolve({
+              stopReason: 'completed',
+              agentsStarted: 4,
+              value: {
+                status: 'completed',
+                cycles: { implementation: 1, review: 1, qa: 1 },
+                plan: {},
+                implementation: {},
+                review: { status: 'pass' },
+                qa: { status: 'pass' },
+              },
+            }),
+            cancel: () => {},
+            dispose: () => Promise.resolve(),
+          }
+        },
       },
       effect: (fn: any) => {
         const iterator = fn()
@@ -204,11 +242,12 @@ describe('/aop slash command', () => {
     const { apply: applyHost } = await import('../src/index')
     applyHost(ctx, {
       roles: {
-        plan: { model: 'p', tools: [{ name: 'read', access: 'read' }] },
-        implementation: { model: 'i', tools: [{ name: 'write', access: 'write' }] },
-        review: { model: 'r', tools: [{ name: 'read', access: 'read' }] },
+        plan: { model: 'deepseek-v4-pro', provider: 'opencode-go', tools: [{ name: 'read', access: 'read' }] },
+        implementation: { model: 'deepseek-v4-flash', provider: 'opencode-go', tools: [{ name: 'write', access: 'write' }] },
+        review: { model: 'kimi-k3', provider: 'kimi-coding', tools: [{ name: 'read', access: 'read' }] },
         qa: {
-          model: 'q',
+          model: 'deepseek-v4-flash',
+          provider: 'opencode-go',
           tools: [
             { name: 'browser_navigate', access: 'read', browserNavigation: true },
             { name: 'browser_snapshot', access: 'read', browserEvidence: true },
@@ -216,23 +255,24 @@ describe('/aop slash command', () => {
         },
       },
     })
-    return { registered, yields }
+    return { registered, yields, startedRuns }
   }
-
   it('registers the command, yields its disposer, and rejects empty objectives', async () => {
     const { registered, yields } = await mountHostAop()
-    expect(registered).toHaveLength(1)
-    expect(registered[0]).toMatchObject({ name: 'aop', recordInput: false })
+    const command = registered.find((def: any) => def.name === 'aop')
+    expect(command).toBeDefined()
+    expect(command).toMatchObject({ recordInput: false })
     expect(yields).toHaveLength(1)
     expect((yields[0] as any).name).toBe('regDisposer')
-    const result = await registered[0].handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
+    const result = await command.handler({ rawInput: '   ', commandId: 'cmd-1', agent: {}, signal: new AbortController().signal })
     expect(result).toEqual({ kind: 'error', text: 'Usage: /aop <objective>' })
   })
 
   it('routes the objective to the agent as a followup and acks immediately', async () => {
     const followups: any[] = []
     const { registered } = await mountHostAop()
-    const result = await registered[0].handler({
+    const command = registered.find((def: any) => def.name === 'aop')
+    const result = await command.handler({
       rawInput: '  build a todo app ',
       commandId: 'cmd-42',
       agent: { followup: (message: any) => { followups.push(message) } },
@@ -245,5 +285,30 @@ describe('/aop slash command', () => {
     expect(followups[0].source).toMatchObject({ kind: 'plugin', plugin: 'aop' })
     expect(result.kind).toBe('success')
     expect((result as any).text).toContain('AOP delivery requested')
+  })
+
+  it('fails preflight with a clear error when a role model is not configured', async () => {
+    const { registered, startedRuns } = await mountHostAop({
+      'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
+      'kimi-coding': [],
+    })
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    await expect(tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )).rejects.toThrow('Role "review" route is misconfigured: provider "kimi-coding" has no model "kimi-k3"')
+    expect(startedRuns).toHaveLength(0)
+  })
+
+  it('starts the workflow when every role model resolves', async () => {
+    const { registered, startedRuns } = await mountHostAop()
+    const tool = registered.find((def: any) => def.name === 'aop_delivery')
+    const result = await tool.execute(
+      { objective: 'Deliver something.' },
+      { agent: {}, signal: new AbortController().signal },
+    )
+    expect(startedRuns).toHaveLength(1)
+    expect(startedRuns[0].meta.name).toBe('aop-delivery-workflow')
+    expect(result.runId).toBe('run-1')
   })
 })

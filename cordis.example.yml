@@ -9,6 +9,8 @@
     maxFindings: 64
     maxArtifactChars: 32768
     maxResultChars: 262144
+    runTimeoutMs: 3600000
+    phaseTimeoutMs: 1800000
     roles:
       plan:
         provider: deepseek

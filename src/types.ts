@@ -43,6 +43,10 @@ export interface Config {
   maxArtifactChars?: number
   /** Maximum serialized characters in the complete model-visible result (default `262144`). */
   maxResultChars?: number
+  /** Wall-clock cap on one complete workflow run in milliseconds (default `3600000`). */
+  runTimeoutMs?: number
+  /** Wall-clock cap per workflow phase in milliseconds (default `1800000`). */
+  phaseTimeoutMs?: number
   /** Per-role route and tool restrictions. */
   roles: Record<RoleName, RoleConfig>
 }

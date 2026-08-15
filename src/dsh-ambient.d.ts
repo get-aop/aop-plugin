@@ -6,6 +6,8 @@ declare module '@deepseek-ai/cordis' {
     systemPrompt: any
     sessions: any
     commands: any
+    llm: any
+    on: (name: string, callback: any) => any
     effect: (fn: any, label?: string) => any
     slots?: {
       register?: (options: any, component: any) => void
@@ -99,5 +101,7 @@ declare module '@deepseek-ai/dsh-workflow' {
   }
 }
 
-declare module '@deepseek-ai/dsh-subagent' {}
-declare module '@deepseek-ai/dsh-system-prompt' {}
+declare module '@deepseek-ai/dsh-subagent' {
+}
+declare module '@deepseek-ai/dsh-system-prompt' {
+}
