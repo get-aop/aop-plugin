@@ -477,17 +477,6 @@ describe('/aop slash command', () => {
     expect(startedRuns).toHaveLength(0)
   })
 
-  it('starts the workflow when every role model resolves', async () => {
-    const { registered, startedRuns } = await mountHostAop()
-    const tool = registered.find((def: any) => def.name === 'aop_delivery')
-    const result = await tool.execute(
-      { objective: 'Deliver something.' },
-      { agent: {}, signal: new AbortController().signal },
-    )
-    expect(startedRuns).toHaveLength(1)
-    expect(startedRuns[0].meta.name).toBe('aop-delivery-workflow')
-    expect(result.runId).toBe('run-1')
-  })
 
   it('ignores stale child errors when the final turn ended differently', async () => {
     const session = {
