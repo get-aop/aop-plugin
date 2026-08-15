@@ -103,7 +103,7 @@ Mount the plugin in your `cordis.yml` profile or overlay:
 
       review:
         provider: kimi-coding
-        model: kimi-k3
+        model: k3
         tools:
           - name: read
             access: read

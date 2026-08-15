@@ -43,7 +43,7 @@
 
       review:
         provider: kimi-coding
-        model: kimi-k3
+        model: k3
         tools:
           - name: read
             access: read

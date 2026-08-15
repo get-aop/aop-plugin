@@ -183,7 +183,7 @@ describe('/aop slash command', () => {
   const roleDefaults = () => ({
     plan: { model: 'deepseek-v4-pro', provider: 'opencode-go', tools: [{ name: 'read', access: 'read' }] },
     implementation: { model: 'deepseek-v4-flash', provider: 'opencode-go', tools: [{ name: 'write', access: 'write' }] },
-    review: { model: 'kimi-k3', provider: 'kimi-coding', tools: [{ name: 'read', access: 'read' }] },
+    review: { model: 'k3', provider: 'kimi-coding', tools: [{ name: 'read', access: 'read' }] },
     qa: {
       model: 'deepseek-v4-flash',
       provider: 'opencode-go',
@@ -205,7 +205,7 @@ describe('/aop slash command', () => {
   } = {}) {
     const catalog = options.catalog ?? {
       'opencode-go': ['deepseek-v4-pro', 'deepseek-v4-flash'],
-      'kimi-coding': ['kimi-k3'],
+      'kimi-coding': ['k3'],
     }
     const registered: any[] = []
     const yields: unknown[] = []
@@ -317,7 +317,7 @@ describe('/aop slash command', () => {
     await expect(tool.execute(
       { objective: 'Deliver something.' },
       { agent: {}, signal: new AbortController().signal },
-    )).rejects.toThrow('Role "review" route kimi-coding/kimi-k3 is not served by this deployment: UNKNOWN_MODEL')
+    )).rejects.toThrow('Role "review" route kimi-coding/k3 is not served by this deployment: UNKNOWN_MODEL')
     expect(startedRuns).toHaveLength(0)
   })
 
