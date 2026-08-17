@@ -18,7 +18,20 @@ const acceptanceCriterionSchema = {
   properties: {
     id: { type: 'string' },
     requirement: { type: 'string' },
-    verification: { type: 'string' },
+    verification: {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: {
+            surface: { type: 'string', enum: ['web', 'cli', 'api', 'service', 'library', 'desktop'] },
+            method: { type: 'string' },
+          },
+          required: ['surface', 'method'],
+          additionalProperties: false,
+        },
+      ],
+    },
   },
   required: ['id', 'requirement', 'verification'],
   additionalProperties: false,
@@ -136,7 +149,17 @@ function validFinding(value) {
 function validAcceptanceCriterion(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     && normalized(value.id) && value.id !== 'QA-INSTRUCTIONS'
-    && normalized(value.requirement) && normalized(value.verification)
+    && normalized(value.requirement)
+    && (
+      normalized(value.verification)
+      || (
+        value.verification !== null
+        && typeof value.verification === 'object'
+        && !Array.isArray(value.verification)
+        && ['web', 'cli', 'api', 'service', 'library', 'desktop'].includes(value.verification.surface)
+        && normalized(value.verification.method)
+      )
+    )
 }
 function validateFindings(findings, stage) {
   if (!Array.isArray(findings) || findings.length > args.maxFindings || !findings.every(validFinding)) {
@@ -282,6 +305,8 @@ function stageChecked(fn) {
 function findingKey(finding) {
   return JSON.stringify(['id', 'severity', 'summary', 'evidence', 'location', 'remediation'].map(key => finding[key]))
 }
+const persistentFindingMap = new Map()
+
 function mergeFindings(...groups) {
   const byId = new Map()
   for (const group of groups) {
@@ -296,16 +321,33 @@ function mergeFindings(...groups) {
   const merged = []
   for (const entries of byId.values()) {
     if (entries.length === 1) {
-      merged.push(entries[0].finding)
+      const stored = persistentFindingMap.get(entries[0].source + ':' + entries[0].finding.id)
+      merged.push({ ...entries[0].finding, id: stored || entries[0].finding.id })
     } else {
-      for (const entry of entries) merged.push({ ...entry.finding, id: entry.source + ':' + entry.finding.id })
+      for (const entry of entries) {
+        const prefixedId = entry.source + ':' + entry.finding.id
+        persistentFindingMap.set(entry.source + ':' + entry.finding.id, prefixedId)
+        merged.push({ ...entry.finding, id: prefixedId })
+      }
     }
   }
   return merged
 }
+function mapRetestFindings(findings) {
+  const seen = new Set()
+  const mapped = []
+  for (const f of findings) {
+    const mappedId = persistentFindingMap.get('qa:' + f.id) || f.id
+    if (!seen.has(mappedId)) {
+      seen.add(mappedId)
+      mapped.push({ ...f, id: mappedId })
+    }
+  }
+  return mapped
+}
 function terminalFindings() {
   return mergeFindings(
-    { source: 'qa', findings: qaRetestFindings },
+    { source: 'qa', findings: mapRetestFindings(qaRetestFindings) },
     { source: feedbackSource === 'QA' ? 'qa' : 'review', findings: pendingFindings },
   )
 }
@@ -314,7 +356,7 @@ phase('Plan')
 const rawPlan = await agent([
   'Create a decision-complete implementation plan for the objective below. Inspect the workspace before planning. Do not modify files.',
   'Objective:\n' + args.objective,
-  'Return ready only when the plan has concrete ordered steps and observable acceptance criteria. Give every criterion a stable id other than QA-INSTRUCTIONS plus a requirement and browser-verifiable method. Return blocked only for an external prerequisite that inspection cannot resolve.',
+  'Return ready only when the plan has concrete ordered steps and observable acceptance criteria. Give every criterion a stable id other than QA-INSTRUCTIONS plus a requirement and a method verifiable on its declared surface (web, cli, api, service, library, desktop). Return blocked only for an external prerequisite that inspection cannot resolve.',
 ].join('\n\n'), roleOptions('plan', planSchema, 'Delivery plan', 'Plan'))
 if (rawPlan === null) return failure('stage-failed', 'plan', 'Planner child failed', { implementation: 0, review: 0, qa: 0 }, [])
 const checkedPlan = stageChecked(() => validatePlan(rawPlan))
@@ -367,7 +409,7 @@ while (true) {
     'Accepted plan:\n' + JSON.stringify(plan),
     'Latest implementation artifact:\n' + JSON.stringify(implementation),
     'Findings that caused this implementation pass:\n' + JSON.stringify(pendingFindings),
-    'Read the actual changed code and relevant call sites. Verify claimed fixes and acceptance criteria. Pass only with zero findings.',
+    'Read the actual changed code and relevant call sites. Verify claimed fixes: confirm the defect is gone at its location and not merely renamed or suppressed. If the developer rebutted a finding as a false positive with evidence, arbitrate explicitly: either accept the rebuttal (omit the finding) or refute it with NEW evidence. Verify all criteria are met. Hunt for regressions beyond the changed files. Pass only with zero findings.',
   ].join('\n\n'), roleOptions('review', reviewSchema, 'Review pass ' + cycles.review, 'Review'))
   if (rawReview === null) return failure('stage-failed', 'review', 'Review child failed', cycles, terminalFindings())
   const checkedReview = stageChecked(() => validateReview(rawReview))
@@ -395,7 +437,7 @@ while (true) {
     'Passing review artifact:\n' + JSON.stringify(review),
     ...(args.qaUrl === undefined ? [] : ['Target URL: ' + args.qaUrl]),
     ...(args.qaInstructions === undefined ? [] : ['QA instructions:\n' + args.qaInstructions]),
-    'Prior QA findings requiring retest:\n' + JSON.stringify(qaRetestFindings),
+    'Prior QA findings requiring retest:\n' + JSON.stringify(mapRetestFindings(qaRetestFindings)),
   ]
   if (args.qaUrl === undefined) {
     qaPromptParts.push(
@@ -419,7 +461,7 @@ while (true) {
   )
   const rawQa = await agent(qaPromptParts.join('\n\n'), roleOptions('qa', qaSchema, 'QA pass ' + cycles.qa, 'QA'))
   if (rawQa === null) return failure('stage-failed', 'qa', 'QA child failed', cycles, terminalFindings())
-  const checkedQa = stageChecked(() => validateQa(rawQa, plan.acceptanceCriteria, qaRetestFindings))
+  const checkedQa = stageChecked(() => validateQa(rawQa, plan.acceptanceCriteria, mapRetestFindings(qaRetestFindings)))
   if (!checkedQa.ok) return failure('stage-failed', 'qa', checkedQa.message, cycles, terminalFindings())
   qa = checkedQa.value
   if (qa.status === 'blocked') return failure('blocked', 'qa', qa.blocker, cycles, terminalFindings())
