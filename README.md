@@ -163,6 +163,8 @@ Wall-clock guards: `runTimeoutMs` cancels the whole run; `phaseTimeoutMs` cancel
 
 > **Discovery-mode trust boundary**: when `qaUrl` is omitted, the target is *declared by the QA model* in the artifact's `discoveredUrl`. The workflow enforces that navigation and evidence are pinned to exactly that declared URL (no navigation elsewhere can certify evidence), but it cannot verify that the declared URL is genuinely the deliverable — target *authenticity* is trusted to the QA model. For strict environments, always pass an explicit `qaUrl`.
 
+**Desktop apps (Electron etc.)**: QA is read-only and cannot start the app under test. The implementation phase (the only role with shell access) is instructed to start the deliverable's dev server or preview path in the background and report it as a `URL: http://...` verification entry; QA uses that URL first. If nothing is running, QA probes common dev ports once and returns `blocked` naming exactly what must be started and how.
+
 ---
 
 ## About AOP
