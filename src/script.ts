@@ -346,6 +346,7 @@ while (true) {
     pendingFindings.length === 0
       ? 'Inspect current workspace state, implement every pending item, and run focused verification. There are no pending findings: addressedFindingIds must be an empty array. If the objective already appears implemented in the workspace (for example by a previous run), verify it and report status and changedFiles honestly; do not invent finding ids. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.'
       : 'Inspect current workspace state, implement every pending item, run focused verification, and return an exact disposition for every pending finding id in addressedFindingIds. Do not wait for external processes: after you have triggered a merge, CI run, or release, return your artifact immediately — external completion is not your responsibility, and review and browser QA run automatically after your artifact. Never poll external runs with sleep loops (such as sleep N && gh run watch); at most two or three status checks per external pipeline, then return.',
+    'If the deliverable is an application with a browser-reachable dev server (web app, Electron preview, Vite dev), start it in the background before returning and report the exact URL as the first verification entry in the form "URL: http://...". The QA role has no shell access and cannot start it itself.',
     ...(args.ship === true ? ['The ship pass after QA owns the PR, CI verification, and merge: do not push, open pull requests, or merge anything yourself. Leave your delivered changes committed (or uncommitted) in the workspace.'] : []),
   ].join('\n\n'), roleOptions('implementation', implementationSchema, 'Implementation pass ' + cycles.implementation, 'Implementation'))
   if (rawImplementation === null) return failure('stage-failed', 'implementation', 'Implementation child failed', cycles, terminalFindings())
@@ -410,6 +411,9 @@ while (true) {
       'Report the supplied QA instructions as requirementId QA-INSTRUCTIONS.',
     )
   }
+  qaPromptParts.push(
+    'Use the URL reported in the implementation artifact\'s verification (a "URL: http://..." entry) as your target if present. Desktop applications (Electron and similar) are browser-testable only through their dev-server or preview HTTP path; if no target is running and you cannot start one (you have no shell access), probe the common dev ports once and return blocked naming exactly what must be started and how.',
+  )
   qaPromptParts.push(
     'Exercise every accepted criterion through browser tools. Report the exact URL you tested as discoveredUrl (absolute http(s)). Retest every prior QA finding and return its id in retestedFindingIds. Use changes-required for product defects and blocked only when the target or an external prerequisite is unavailable.',
   )
